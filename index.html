@@ -1109,7 +1109,7 @@ function syncAutoObjects(reposition = false) {
 let gen = 0, solveTimer = 0;
 const tick = () => new Promise(r => setTimeout(r, 0));
 function setStatus(t, frac) { $('#statusText').textContent = t; $('#statusBar').style.width = frac == null ? '0' : (frac * 100).toFixed(0) + '%'; }
-function scheduleSolve(delay = 200) { clearTimeout(solveTimer); solveTimer = setTimeout(runSearch, delay); save(); }
+function scheduleSolve(delay = 200) { S.solving = true; clearTimeout(solveTimer); solveTimer = setTimeout(runSearch, delay); save(); }
 /* How many stalls to draw when laying out only what's required: the requirement less garage stalls,
    plus stalls that become accessible-stall access aisles, plus the optional cushion. */
 function parkingTarget() {
@@ -1339,7 +1339,8 @@ function analyze() {
   const outEnv = S.objs.filter(o => APRON_KINDS.has(o.kind)).filter(o => !env.building || !polyInside(objPoly(o), env.building) || ex.noBuild.some(p => polysOverlap(objPoly(o), p)));
   add('check.buildingInEnvelope', 'Buildings inside building envelope', !env.building ? 'fail' : outEnv.length ? 'fail' : 'pass', !env.building ? 'Setbacks leave no buildable area' : outEnv.length ? `${outEnv.map(o => o.name).join(', ')} crosses a setback, no-build easement or protected area` : 'All buildings and garages sit inside the setback lines');
   add('check.landFit', 'Program fits on buildable land', D['derived.landRequired'] <= D['derived.netBuildableArea'] ? 'pass' : 'fail', `Needs ${fmt(D['derived.landRequired'])} sf (footprint + ${fmt(num('parking.grossAreaPerStall', 325))} sf/stall + loading + pond + reserves) vs ${fmt(D['derived.netBuildableArea'])} sf net buildable`);
-  if (S.solving) add('check.parkingProvided', 'Parking meets minimum', 'need', 'Solving parking layouts…');
+  const pending = S.solving && !(L && L.live);
+  if (pending) add('check.parkingProvided', 'Parking meets minimum', 'need', 'Solving parking layouts…');
   else add('check.parkingProvided', 'Parking meets minimum', prov >= req ? 'pass' : 'fail', `${fmt(prov)} provided vs ${fmt(req)} required`);
   if (has('parking.maxRatioPer1000SF') && gfa > 0) add('check.parkingMax', 'Parking under the maximum', prov / (gfa / 1000) <= num('parking.maxRatioPer1000SF') + 1e-9 ? 'pass' : 'fail', `${fmt(prov / (gfa / 1000), 2)} vs max ${fmt(num('parking.maxRatioPer1000SF'), 2)} per 1,000 sf`);
   if (has('app.maxParkingPercentOfRequired') && req > 0) { const cap = Math.floor(req * num('app.maxParkingPercentOfRequired') / 100); add('check.parkingCap', 'Surface parking under the code maximum', surf <= cap ? 'pass' : 'fail', `${fmt(surf)} surface stalls vs a cap of ${fmt(cap)} (${fmt(num('app.maxParkingPercentOfRequired'))}% of ${fmt(req)} required). Move extra stalls into a garage or drop them.`); }
@@ -1375,7 +1376,7 @@ function analyze() {
   if (L) { for (const a of L.W.aisles) if (a.w >= laneW - 1e-6) lanes.push({ poly: a.poly, w: a.w }); for (const c of L.W.connectors) if (c.w >= laneW - 1e-6) lanes.push({ poly: c.poly, w: c.w }); }
   for (const d of dws) if (d.w >= laneW) lanes.push({ poly: d.poly, w: d.w });
   if (!bs.length) add('check.fireAccess', 'Fire lane reaches all sides', 'manual', 'No buildings');
-  else if (S.solving && !lanes.length) add('check.fireAccess', 'Fire lane reaches all sides', 'need', 'Solving parking layouts…');
+  else if (pending && !lanes.length) add('check.fireAccess', 'Fire lane reaches all sides', 'need', 'Solving parking layouts…');
   else if (!lanes.length) add('check.fireAccess', 'Fire lane reaches all sides', 'fail', `No drive aisle is at least ${fmt(laneW)} ft wide`);
   else {
     let worst = 0;
@@ -2005,7 +2006,7 @@ function placeNew() {
   const ok = findSpot(o, target, reg, rots);
   S.objs.push(o); S.sel = o.id; S.adding = null;
   S.placeNote = ok ? null : `${o.name} doesn't fit inside the setback lines at ${fmt(o.w)}' × ${fmt(o.d)}'. It's placed as close as possible; make it smaller, change its proportions, or drag it.`;
-  syncAutoObjects(); renderObjList(); renderObjEditor(); renderReqBreak(); renderAnalysis(); draw(); scheduleSolve();
+  syncAutoObjects(); renderObjList(); renderObjEditor(); renderReqBreak(); scheduleSolve(); renderAnalysis(); draw();
 }
 function renderAddForm() {
   const k = S.adding, isB = k === 'building';
@@ -2254,7 +2255,7 @@ function setField(fid, ctx, v) {
     const wrap = document.querySelector(`[data-fwrap="${CSS.escape(fid)}"][data-wctx="b"]`); if (wrap) wrap.classList.toggle('need', FIELDS[fid].default === null && (v == null || v === ''));
     updateNeedCounts();
     if (['building.serviceSide'].includes(fid)) syncAutoObjects(true);
-    renderAnalysis(); draw(); scheduleSolve(); return;
+    scheduleSolve(); renderAnalysis(); draw(); return;
   }
   S.F[fid] = v; S.touched.add(fid);
   const wrap = document.querySelector(`[data-fwrap="${CSS.escape(fid)}"][data-wctx="g"]`); if (wrap) wrap.classList.toggle('need', FIELDS[fid].default === null && (v == null || v === ''));
@@ -2270,7 +2271,7 @@ function onFieldChange(fid) {
   if (fid === 'access.postedSpeed') rerenderField('access.sightDistanceRequired');
   if (fid === 'siteConditions.demolitionRequired') renderObjEditor();
   if (['zoning', 'parking', 'access'].includes((FIELDS[fid] || {}).section) && (FIELDS[fid].source === 'local_code' || FIELDS[fid].source === 'agency')) markCustom();
-  computeEnv(); renderLegend(); renderParcelFacts(); renderReqBreak(); renderAnalysis(); draw(); scheduleSolve();
+  computeEnv(); renderLegend(); renderParcelFacts(); renderReqBreak(); scheduleSolve(); renderAnalysis(); draw();
 }
 const left = $('#left');
 left.addEventListener('input', (e) => { if (e.target.closest('[data-fid]') && !e.target.matches('select, input[type="checkbox"]')) onFieldEvent(e); });
@@ -2474,7 +2475,7 @@ function applyProfile(key) {
   }
   for (const o of buildings()) if (!S.uses.some(u => u.id === o.use)) o.use = S.uses[0].id;
   S.P.profile = key;
-  renderProfileSelect(); renderUses(); renderAllSections(); syncAutoObjects(); computeEnv(); renderReqBreak(); renderParcelFacts(); renderLegend(); renderAnalysis(); draw(); scheduleSolve();
+  renderProfileSelect(); renderUses(); renderAllSections(); syncAutoObjects(); computeEnv(); renderReqBreak(); renderParcelFacts(); renderLegend(); scheduleSolve(); renderAnalysis(); draw();
 }
 $('#profile').addEventListener('change', (e) => { if (e.target.value === 'custom') { S.P.profile = 'custom'; renderProfileSelect(); return; } applyProfile(e.target.value); });
 $('#btnSaveProfile').addEventListener('click', () => {
