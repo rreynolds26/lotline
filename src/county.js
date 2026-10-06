@@ -15,8 +15,11 @@ const kOf = () => Math.cos(S.geo.lat * DEG);
 const ll2w = (lng, lat) => [(lng - S.geo.lng) * FT_PER_DEG_LAT * kOf(), (lat - S.geo.lat) * FT_PER_DEG_LAT];
 const w2ll = (p) => [S.geo.lng + p[0] / (FT_PER_DEG_LAT * kOf()), S.geo.lat + p[1] / FT_PER_DEG_LAT];
 
-async function getJSON(url, opts) {
-  const r = await fetch(url, opts);
+async function getJSON(url, opts = {}) {
+  // Never wait forever on a stalled service: give up after 20 seconds.
+  const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), 20000);
+  let r;
+  try { r = await fetch(url, { ...opts, signal: ac.signal }); } catch (e) { throw new Error(e.name === 'AbortError' ? 'the service took too long to answer' : 'network error'); } finally { clearTimeout(timer); }
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const j = await r.json(); if (j.error) throw new Error(j.error.message || 'service error');
   return j;
@@ -141,6 +144,9 @@ async function loadCountyParcel(p) {
   const set = (id, v, why) => { if (v === undefined || v === null || (typeof v === 'number' && !isFinite(v))) return; S.F[id] = v; S.touched.add(id); R.filled.push([id, v, why]); };
   const find = (group, text, level = 'info') => R.findings.push({ group, text, level });
   setStatus('Loading parcel data…', 0.05); renderSiteData();
+  const rec = (p.a.PAR_ADD || '').trim();
+  const label = p.matched && rec && p.matched.toUpperCase() !== rec.toUpperCase() ? `<b>${esc(p.matched)}</b>, which is on parcel ${esc(p.a.PARCEL_NO)} (recorded as ${esc(rec)})` : `<b>${esc(rec || p.a.PARCEL_NO)}</b> (parcel ${esc(p.a.PARCEL_NO)})`;
+  searchMsg(`Found ${label}. Loading zoning, utilities, flood, soils and topography…`);
   afterParcelChange(true, true);
 
   const P = S.parcel; const bb0 = bbox(P); const pad = 400;
@@ -390,7 +396,7 @@ async function loadCountyParcel(p) {
     find('Topography', `Ground runs ${fmt(lo.z, 1)} to ${fmt(hi.z, 1)} ft (${fmt(hi.z - lo.z, 1)} ft of relief), average slope ${fmt(slope, 1)}% falling toward ${Math.round(bearing)}° (${['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(bearing / 45) % 8]}).`, slope > 8 ? 'warn' : 'info');
   }));
 
-  let done = 0; jobs.forEach(j => j.then(() => setStatus(`Loading parcel data… ${++done}/${jobs.length}`, done / jobs.length)));
+  let done = 0; jobs.forEach(j => j.then(() => { ++done; setStatus(`Loading parcel data… ${done}/${jobs.length}`, done / jobs.length); searchMsg(`Found ${label}. Loading site data… ${done} of ${jobs.length} sources.`); }));
   await Promise.all(jobs);
   if (CTX.report !== R) return; // another parcel was loaded meanwhile
   R.ms = Math.round(performance.now() - t0);
@@ -405,14 +411,24 @@ async function loadCountyParcel(p) {
   renderAllSections(); computeEnv(); renderParcelFacts(); renderLegend(); renderObjList(); renderObjEditor(); renderReqBreak(); renderAnalysis(); renderSiteData();
   draw(); scheduleSolve(0);
   setStatus(`Loaded ${p.a.PARCEL_NO}: ${R.filled.length} inputs filled`, null);
+  searchMsg(`Loaded ${label} in ${fmt(R.ms / 1000, 0)} s: ${R.filled.length} inputs filled. Add your buildings under <b>Buildings &amp; site objects</b>; findings are in the <b>Site data</b> tab.`, 'ok');
   $('#rTabs [data-r="site"]').click();
 }
 
 /* ---------- search: address or parcel number ---------- */
+function searchMsg(html, kind) { const m = $('#searchMsg'); if (!m) return; if (!html) { m.hidden = true; return; } m.hidden = false; m.className = 'search-msg ' + (kind || ''); m.innerHTML = html; }
+function searchBusy(on) { const b = $('#btnFind'); b.disabled = on; b.textContent = on ? 'Searching…' : 'Find'; }
+/* Loading a different parcel saves the current design to Saved sites and starts clean, unless you chose to carry buildings over. */
+function prepareForParcel(pno) {
+  if (siteKey() === pno) return;
+  const keep = !!($('#keepBldgs') && $('#keepBldgs').checked);
+  if (hasDesign()) { archiveSite(); clearSite(keep); }
+}
 async function countySearch(q) {
   const err = $('#mapErr'); err.hidden = true;
-  if (EMBEDDED) { err.innerHTML = 'County data only loads in the hosted version of Lotline. Claude\'s viewer blocks outside connections.'; err.hidden = false; return; }
-  const btn = $('#btnFind'); btn.disabled = true;
+  if (!q || $('#btnFind').disabled) return;
+  if (EMBEDDED) { searchMsg('County data only loads in the hosted version of Lotline at <b>rreynolds26.github.io/lotline</b>. Claude\'s viewer blocks outside connections.', 'bad'); return; }
+  searchBusy(true); searchMsg(`Searching Athens-Clarke records for <b>${esc(q)}</b>…`);
   try {
     const ll = q.match(/^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$/);
     let pt = null, parcel = null;
@@ -429,7 +445,7 @@ async function countySearch(q) {
       // 1. the county address-point layer links addresses straight to parcel numbers
       const ap = await arcQuery(`${ACC}/ACC_Address_Point/FeatureServer/0`, { where: `UPPER(FullAdd) = '${street.toUpperCase().replace(/'/g, "''")}'`, fields: 'FullAdd,ParcelID', geometry: false }).catch(() => []);
       const pid = ap[0] && ap[0].attributes.ParcelID;
-      if (pid) { const fs = await arcQuery(`${ACC}/ACC_Parcels/FeatureServer/0`, { where: `PARCEL_NO = '${pid.replace(/'/g, "''")}'`, fields: 'OBJECTID,PARCEL_NO,PAR_ADD,ACRES,OWNER_NAME' }); if (fs[0]) parcel = { a: fs[0].attributes, g: fs[0].geometry }; }
+      if (pid) { const fs = await arcQuery(`${ACC}/ACC_Parcels/FeatureServer/0`, { where: `PARCEL_NO = '${pid.replace(/'/g, "''")}'`, fields: 'OBJECTID,PARCEL_NO,PAR_ADD,ACRES,OWNER_NAME' }); if (fs[0]) parcel = { a: fs[0].attributes, g: fs[0].geometry, matched: ap[0].attributes.FullAdd }; }
     }
     if (!pt && !parcel) {
       // 2. the county geocoder handles spelled-out or partial addresses
@@ -437,17 +453,18 @@ async function countySearch(q) {
       const c = j && j.candidates && j.candidates[0];
       if (c && c.score >= 80) pt = c.location;
     }
-    if (!pt && !parcel) { btn.disabled = false; return locate(q); } // outside the county: fall back to the general geocoder
+    if (!pt && !parcel) { searchBusy(false); searchMsg(`No Athens-Clarke parcel matches <b>${esc(q)}</b>. Searching the general map instead…`); if (hasDesign()) { archiveSite(); clearSite(false); } return locate(q); } // outside the county: fall back to the general geocoder
     if (!parcel && pt) {
-      if (!inACC(pt.y, pt.x)) { btn.disabled = false; return locate(q); }
+      if (!inACC(pt.y, pt.x)) { searchBusy(false); searchMsg('That spot is outside Athens-Clarke County. Placing a lot to trace…'); if (hasDesign()) { archiveSite(); clearSite(false); } return locate(q); }
       const fs = await arcQuery(`${ACC}/ACC_Parcels/FeatureServer/0`, { geom: [pt.x - 0.00001, pt.y - 0.00001, pt.x + 0.00001, pt.y + 0.00001], fields: 'OBJECTID,PARCEL_NO,PAR_ADD,ACRES,OWNER_NAME' });
       if (fs[0]) parcel = { a: fs[0].attributes, g: fs[0].geometry };
     }
-    btn.disabled = false;
-    if (!parcel) { err.textContent = 'Found the location but no county parcel there.'; err.hidden = false; return; }
+    if (!parcel) { searchMsg('Found the location, but no county parcel there. Try the parcel number, or click <b>Pick a parcel on the map</b>.', 'bad'); return; }
+    prepareForParcel(parcel.a.PARCEL_NO);
     if (!S.geo) S.geo = { lat: parcel.g.rings[0][0][1], lng: parcel.g.rings[0][0][0] };
     await loadCountyParcel(parcel);
-  } catch (e) { btn.disabled = false; err.textContent = `County search failed: ${e.message}.`; err.hidden = false; }
+  } catch (e) { searchMsg(`The county search did not go through (${esc(e.message)}). Check your connection and try again.`, 'bad'); }
+  finally { searchBusy(false); }
 }
 
 /* ---------- panel ---------- */
@@ -477,7 +494,7 @@ $('#showCounty').addEventListener('change', (e) => { CTX.show = e.target.checked
 cv.addEventListener('pointerdown', (e) => {
   if (!CTX.pick || S.mode !== 'select' || !S.geo) return;
   const r = cv.getBoundingClientRect(); const w = S2W(e.clientX - r.left, e.clientY - r.top); const p = parcelAt(w);
-  if (p) { e.stopImmediatePropagation(); loadCountyParcel(p); }
+  if (p) { e.stopImmediatePropagation(); prepareForParcel(p.a.PARCEL_NO); loadCountyParcel(p); }
 }, true);
 cv.addEventListener('pointermove', (e) => {
   if (!CTX.pick || !S.geo) { if (CTX.hover) { CTX.hover = null; draw(); } return; }

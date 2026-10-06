@@ -611,6 +611,7 @@ function netBuildable(pe, ex) {
 }
 async function runSearch() {
   const my = ++gen;
+  if (S.P.empty) { S.scen = []; S.layout = null; renderResults(); draw(); return; }
   computeEnv();
   const R = S.env.paving;
   S.env.net = netBuildable(R, exclusions().noPave.filter(p => !driveways().some(d => d.poly === p)));
@@ -1043,6 +1044,7 @@ function paint() {
   ctx.fillStyle = TOK.bg; ctx.fillRect(0, 0, CW, CH);
   const sat = drawImagery();
   if (!sat) drawGrid();
+  if (S.P.empty) { if (typeof drawCounty === 'function') drawCounty(); drawScale(sat); if (S.ctx) scheduleOverlay(); return; }
   if (S.img) { const I = S.img; const tl = W2S([I.x, I.y]); ctx.save(); ctx.globalAlpha = I.opacity; ctx.drawImage(I.el, tl[0], tl[1], I.el.naturalWidth * I.fpp * view.s, I.el.naturalHeight * I.fpp * view.s); ctx.restore(); }
   const P = S.parcel, env = S.env;
   pathPoly(P); ctx.fillStyle = TOK.site; ctx.globalAlpha = (S.img || sat) ? 0.3 : 1; ctx.fill(); ctx.globalAlpha = 1;
@@ -1292,7 +1294,7 @@ cv.addEventListener('pointerdown', (e) => {
     updateHint(); draw(); return;
   }
   const h = handleAt(sx, sy);
-  let vi = -1; S.parcel.forEach((q, i) => { const s = W2S(q); if (Math.hypot(s[0] - sx, s[1] - sy) < 9) vi = i; });
+  let vi = -1; if (!S.P.empty) S.parcel.forEach((q, i) => { const s = W2S(q); if (Math.hypot(s[0] - sx, s[1] - sy) < 9) vi = i; });
   const hit = objAt(w);
   if (h) drag = h;
   else if (vi >= 0) { S.selVertex = vi; drag = { type: 'vertex', i: vi }; }
@@ -1339,7 +1341,7 @@ cv.addEventListener('pointerup', endDrag); cv.addEventListener('pointercancel', 
 cv.addEventListener('dblclick', (e) => {
   const [sx, sy] = local(e);
   if (S.mode === 'draw') { const geom = S.target ? S.target.geom : 'polygon'; const min = geom === 'polyline' ? 2 : 3; if (S.drawPts.length > min) { S.drawPts.pop(); finishDraw(); } return; }
-  if (S.mode !== 'select') return;
+  if (S.mode !== 'select' || S.P.empty) return;
   const P = S.parcel;
   for (let i = 0; i < P.length; i++) { const a = W2S(P[i]), b = W2S(P[(i + 1) % P.length]); if (segDist([sx, sy], a, b) < 7) { const w = S2W(sx, sy); P.splice(i + 1, 0, [Math.round(w[0]), Math.round(w[1])]); afterParcelChange(false); return; } }
 });
@@ -1824,6 +1826,7 @@ $('#btnDelProfile').addEventListener('click', () => { const k = String(S.P.profi
 
 /* ================= results ================= */
 function renderParcelFacts() {
+  if (S.P.empty) { $('#parcelFacts').innerHTML = '<p class="note">No parcel loaded.</p>'; return; }
   const a = Math.abs(area(S.parcel)); const env = S.env || computeEnv();
   $('#parcelFacts').innerHTML = `
     <div class="kv"><span>Site area</span><b>${fmt(a)} sf · ${fmt(a / 43560, 2)} ac</b></div>
@@ -1833,6 +1836,7 @@ function renderParcelFacts() {
     ${S.geo ? `<div class="kv"><span>Located at</span><b>${S.geo.lat.toFixed(5)}, ${S.geo.lng.toFixed(5)}</b></div>` : ''}`;
 }
 function renderYield() {
+  if (S.P.empty) { $('#oReq').textContent = '—'; $('#oProv').textContent = '—'; $('#verdict').className = 'verdict ok'; $('#verdictText').textContent = 'No parcel loaded. Search an address or pick a parcel.'; $('#meterFill').style.width = '0'; $('#meterGarage').style.width = '0'; $('#meterMax').textContent = '—'; return; }
   const req = required(); const L = S.layout; const surf = L ? L.eff : 0; const gar = garageTotal(); const prov = surf + gar;
   $('#oReq').textContent = fmt(req); $('#oProv').textContent = fmt(prov);
   const ok = prov >= req; const v = $('#verdict'); v.className = 'verdict ' + (ok ? 'ok' : 'bad');
@@ -1844,6 +1848,7 @@ function renderYield() {
 }
 const STATUS_TXT = { fail: 'Fails', warn: 'Warning', info: 'Flag', need: 'Needs input', manual: 'Check by hand', pass: 'Passes' };
 function renderAnalysis() {
+  if (S.P.empty) { $('#checkSumm').innerHTML = ''; $('#chkBadge').textContent = ''; for (const id of ['#checksOut', '#metricsOut', '#costOut']) $(id).innerHTML = '<p class="note">Load a parcel to see results.</p>'; return; }
   const A = analyze();
   const cnt = (s) => A.C.filter(c => c.status === s).length;
   $('#checkSumm').innerHTML = [['fail', 'failing'], ['warn', 'warnings'], ['need', 'need input'], ['pass', 'passing']].filter(([s]) => cnt(s)).map(([s, t]) => `<span class="pill ${s}">${cnt(s)} ${t}</span>`).join('');
@@ -1919,6 +1924,7 @@ $('#btnRect').addEventListener('click', () => {
 });
 $('#btnPlace').addEventListener('click', testPlacements);
 function afterParcelChange(refit, recenterObjs) {
+  S.P.empty = false;
   S.parcel = ccw(S.parcel); computeEnv();
   const R = S.env.building || S.parcel; const c = centroid(R);
   for (const o of S.objs.filter(o => APRON_KINDS.has(o.kind))) if (recenterObjs || !inside([o.cx, o.cy], S.parcel)) findSpot(o, c, R, [o.rot, o.rot + 90]);
@@ -2136,20 +2142,79 @@ $('#btnCopy').addEventListener('click', async () => {
 
 /*COUNTY*/
 /* ================= persistence & boot ================= */
-function save() {
-  try { localStorage.setItem('lotline.v3', JSON.stringify({ parcel: S.parcel, F: S.F, touched: [...S.touched], objs: S.objs, uses: S.uses, P: S.P, geo: S.geo, ctx: S.ctx && S.ctx.report ? { water: S.ctx.water, sewer: S.ctx.sewer, hydrants: S.ctx.hydrants, manholes: S.ctx.manholes, roads: S.ctx.roads, intersections: S.ctx.intersections, report: { ...S.ctx.report, sources: [...S.ctx.report.sources] } } : null })); } catch (e) { /* storage unavailable */ }
+function stateData() {
+  return { parcel: S.parcel, F: S.F, touched: [...S.touched], objs: S.objs, uses: S.uses, P: S.P, geo: S.geo,
+    ctx: S.ctx && S.ctx.report ? { water: S.ctx.water, sewer: S.ctx.sewer, hydrants: S.ctx.hydrants, manholes: S.ctx.manholes, roads: S.ctx.roads, intersections: S.ctx.intersections, report: { ...S.ctx.report, sources: [...S.ctx.report.sources] } } : null };
 }
-function load() {
-  try {
-    const d = JSON.parse(localStorage.getItem('lotline.v3') || 'null');
-    if (d && Array.isArray(d.parcel) && d.parcel.length >= 3 && Array.isArray(d.objs)) {
-      S.parcel = ccw(d.parcel); S.F = d.F || {}; S.touched = new Set(d.touched || []); S.objs = d.objs.map(o => ({ props: {}, ...o })).filter(o => !(o.kind === 'building' && o.w === 179 && o.d === 112 && o.floors === 1 && !Object.keys(o.props).length)); // drop the old preset sample building S.uses = d.uses && d.uses.length ? d.uses : S.uses; S.P = { ...S.P, ...d.P }; S.geo = d.geo || null; S.ctxSaved = d.ctx || null;
-      nextId = S.objs.reduce((m, o) => Math.max(m, o.id), 0) + 1;
-      return true;
-    }
-  } catch (e) { /* ignore */ }
-  return false;
+function save() { try { localStorage.setItem('lotline.v3', JSON.stringify(stateData())); } catch (e) { /* storage unavailable */ } }
+function applyState(d) {
+  if (!(d && Array.isArray(d.parcel) && d.parcel.length >= 3 && Array.isArray(d.objs))) return false;
+  S.parcel = ccw(d.parcel); S.F = clone(d.F) || {}; S.touched = new Set(d.touched || []);
+  // drop the old preset sample building from projects saved before buildings were sized by hand
+  S.objs = clone(d.objs).map(o => ({ props: {}, ...o })).filter(o => !(o.kind === 'building' && o.w === 179 && o.d === 112 && o.floors === 1 && !Object.keys(o.props).length));
+  S.uses = d.uses && d.uses.length ? clone(d.uses) : S.uses;
+  S.P = { ...S.P, ...d.P }; S.geo = d.geo || null; S.ctxSaved = d.ctx || null;
+  S.sel = null; S.adding = null; S.scen = []; S.layout = null; S.place = [];
+  nextId = S.objs.reduce((m, o) => Math.max(m, o.id), 0) + 1;
+  return true;
 }
+function load() { try { return applyState(JSON.parse(localStorage.getItem('lotline.v3') || 'null')); } catch (e) { return false; } }
+
+/* ---------- saved sites and starting the next one ---------- */
+const SITES_KEY = 'lotline.sites';
+function sitesGet() { try { return JSON.parse(localStorage.getItem(SITES_KEY) || '[]') || []; } catch (e) { return []; } }
+function sitesPut(list) { try { localStorage.setItem(SITES_KEY, JSON.stringify(list.slice(0, 25))); return true; } catch (e) { return false; } }
+const siteKey = () => S.ctx && S.ctx.report && S.ctx.report.parcel ? S.ctx.report.parcel.PARCEL_NO : null;
+function siteName() {
+  const r = S.ctx && S.ctx.report;
+  if (r && r.parcel) return `${(r.parcel.PAR_ADD || '').trim() || 'Parcel'} · ${r.parcel.PARCEL_NO}`;
+  return S.geo ? `Site near ${S.geo.lat.toFixed(4)}, ${S.geo.lng.toFixed(4)}` : `Site of ${fmt(Math.abs(area(S.parcel)) / 43560, 2)} ac`;
+}
+const hasDesign = () => !S.P.empty && (S.objs.some(o => APRON_KINDS.has(o.kind)) || !!(S.ctx && S.ctx.report));
+function archiveSite() {
+  if (!hasDesign()) return;
+  const list = sitesGet(); const key = siteKey() || S.P.siteKey || ('site-' + Date.now()); S.P.siteKey = key;
+  const prov = (S.layout ? S.layout.eff : 0) + garageTotal();
+  const entry = { key, name: siteName(), savedAt: Date.now(), summary: `${buildings().length} bldg · ${fmt(totalGFA())} sf · ${fmt(prov)} stalls`, data: stateData() };
+  const i = list.findIndex(x => x.key === key); if (i >= 0) list.splice(i, 1); list.unshift(entry);
+  if (!sitesPut(list)) { entry.data.ctx = null; sitesPut(list); }
+  renderSites();
+}
+function clearSite(keepBuildings) {
+  const kept = keepBuildings ? S.objs.filter(o => APRON_KINDS.has(o.kind)) : [];
+  if (typeof resetCountyContext === 'function') resetCountyContext();
+  for (const f of Object.values(FIELDS)) if (['polygon', 'polyline', 'polygonList', 'polylineList', 'point', 'objectList'].includes(f.type) || f.source === 'survey' || ['zoning.district', 'zoning.overlays', 'zoning.entitlementPath'].includes(f.id)) { delete S.F[f.id]; S.touched.delete(f.id); }
+  S.objs = kept; S.sel = null; S.adding = null; S.scen = []; S.layout = null; S.place = []; S.P.empty = !keepBuildings || true; S.P.siteKey = null;
+  renderAllSections(); renderObjList(); renderObjEditor(); renderReqBreak(); renderPlacements(); renderResults(); renderParcelFacts(); renderLegend(); draw(); save();
+}
+function startNewSite() {
+  const had = hasDesign(); const name = had ? siteName() : null;
+  archiveSite(); clearSite(false);
+  $$('#parcelTabs button').forEach(x => x.setAttribute('aria-selected', String(x.dataset.tab === 'map')));
+  $$('[data-pane]').forEach(p => p.hidden = p.dataset.pane !== 'map');
+  const det = document.querySelector('details[data-sec="parcel"]'); if (det) det.open = true;
+  const a = $('#addr'); a.value = ''; a.focus();
+  if (typeof searchMsg === 'function') searchMsg(had ? `Saved <b>${esc(name)}</b> to Saved sites. Search the next address or parcel number, or click <b>Pick a parcel on the map</b>.` : 'Search an address or parcel number, or click <b>Pick a parcel on the map</b>.', 'ok');
+  setStatus('Ready for the next site', null);
+}
+function openSite(key) {
+  const e = sitesGet().find(x => x.key === key); if (!e) return;
+  if (hasDesign() && siteKey() !== key) archiveSite();
+  applyState(e.data); S.P.empty = false; S.P.siteKey = key;
+  S.sel = (buildings()[0] || {}).id ?? null; boot(true);
+  if (typeof searchMsg === 'function') searchMsg(`Opened <b>${esc(e.name)}</b>.`, 'ok');
+}
+function renderSites() {
+  const list = sitesGet(); const box = $('#sitesBox'); if (!box) return;
+  box.hidden = !list.length;
+  $('#sitesList').innerHTML = list.map(x => `<div class="site-row"><button class="obj" data-site="${esc(x.key)}"><i style="background:var(--c-paint)"></i><span>${esc(x.name)}<br><small class="note">${esc(x.summary)} · ${new Date(x.savedAt).toLocaleDateString()}</small></span><b>Open</b></button><button class="x" data-del-site="${esc(x.key)}" title="Delete saved site" aria-label="Delete ${esc(x.name)}">×</button></div>`).join('');
+}
+$('#sitesList').addEventListener('click', (e) => {
+  const o = e.target.closest('[data-site]'), d = e.target.closest('[data-del-site]');
+  if (d) { sitesPut(sitesGet().filter(x => x.key !== d.dataset.delSite)); renderSites(); return; }
+  if (o) openSite(o.dataset.site);
+});
+$('#btnNewSite').addEventListener('click', startNewSite);
 function defaultBuilding() { return newObj('building', { name: 'Building A', use: 'retail', cx: 205, cy: 172, w: 179, d: 112 }); }
 const mq = matchMedia('(prefers-color-scheme: dark)');
 const retheme = () => { readTokens(); draw(); };
@@ -2166,6 +2231,7 @@ function boot(refit) {
 // File downloads only work when the page runs on its own, not embedded in a viewer.
 if (window.self !== window.top) $('#btnDownloadJSON').hidden = true;
 if (!load()) { S.objs = []; }
+renderSites();
 S.sel = (buildings()[0] || S.objs[0] || {}).id ?? null;
 readTokens();
 new ResizeObserver(resize).observe($('#stage'));
