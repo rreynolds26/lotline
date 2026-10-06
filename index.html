@@ -2762,7 +2762,12 @@ const kOf = () => Math.cos(S.geo.lat * DEG);
 const ll2w = (lng, lat) => [(lng - S.geo.lng) * FT_PER_DEG_LAT * kOf(), (lat - S.geo.lat) * FT_PER_DEG_LAT];
 const w2ll = (p) => [S.geo.lng + p[0] / (FT_PER_DEG_LAT * kOf()), S.geo.lat + p[1] / FT_PER_DEG_LAT];
 
+/* Public services (FEMA especially) occasionally drop a request; try once more before giving up. */
 async function getJSON(url, opts = {}) {
+  try { return await getJSONOnce(url, opts); }
+  catch (e) { if (/took too long/.test(e.message)) throw e; await new Promise(r => setTimeout(r, 1500)); return getJSONOnce(url, opts); }
+}
+async function getJSONOnce(url, opts = {}) {
   // Never wait forever on a stalled service: give up after 20 seconds.
   const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), 20000);
   let r;
