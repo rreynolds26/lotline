@@ -1210,10 +1210,10 @@ function quickSolve() {
   S.layout = { ...finishScenario(r, cur.aligned), live: true };
   renderYield();
 }
-async function testPlacements() {
+async function testPlacements(opts = {}) {
   const o = selObj(); computeEnv();
   if (!S.env.paving || !o) { setStatus('Select a building or object first', null); return; }
-  const my = ++gen; const btn = $('#btnPlace'); btn.disabled = true;
+  const my = ++gen; clearTimeout(solveTimer); const btn = $('#btnPlace') || {}; btn.disabled = true;
   const P = solverParams(); const apron = APRON_KINDS.has(o.kind) ? Math.max(0, num('app.buildingApron')) : 0;
   const R = S.env.paving, envB = (APRON_KINDS.has(o.kind) ? S.env.building : S.env.paving) || R;
   const others = obstacles(o); const noBuild = exclusions().noBuild; const otherObjs = objObstacles(o);
@@ -1221,6 +1221,9 @@ async function testPlacements() {
   const longest = longestEdgeAngle();
   const rots = uniqAngles([o.rot, o.rot + 90, longest, longest + 90]);
   const cands = [];
+  // Score where the object sits now too, so an automatic re-site only moves it when that helps.
+  const curAt = { cx: o.cx, cy: o.cy, rot: o.rot, cur: true }, curPoly = objPoly(o, 0, curAt);
+  if (polyInside(curPoly, envB) && !otherObjs.concat(noBuild).some(ob => polysOverlap(curPoly, ob))) cands.push(curAt);
   for (const rd of rots) {
     const rr = envB.map(p => rot(p, -rd * DEG)); const bb = bbox(rr);
     const N = 7;
@@ -1245,8 +1248,15 @@ async function testPlacements() {
   btn.disabled = false;
   out.sort((a, b) => b.count - a.count);
   const picked = [];
-  for (const p of out) { if (picked.length >= 4) break; if (picked.some(q => Math.hypot(q.cx - p.cx, q.cy - p.cy) < Math.max(o.w, o.d) * 0.6 && Math.abs(q.rot - p.rot) < 1)) continue; picked.push(p); }
+  for (const p of out) { if (p.cur) continue; if (picked.length >= 4) break; if (picked.some(q => Math.hypot(q.cx - p.cx, q.cy - p.cy) < Math.max(o.w, o.d) * 0.6 && Math.abs(q.rot - p.rot) < 1)) continue; picked.push(p); }
   S.place = picked.map(p => ({ ...p, objId: o.id }));
+  if (opts.apply) {
+    const best = picked[0], cur = out.find(p => p.cur);
+    if (best && (!cur || best.count > cur.count)) {
+      S.moveNote = { id: o.id, prev: { cx: o.cx, cy: o.cy, rot: o.rot }, text: `With the existing building gone, ${o.name} moved to the spot with the most room for parking (≈${fmt(best.count)} stalls${cur ? ` vs ≈${fmt(cur.count)} where it was` : ''}).` };
+      o.cx = best.cx; o.cy = best.cy; o.rot = Math.round(best.rot * 100) / 100; renderObjList(); renderObjEditor(); draw();
+    }
+  }
   setStatus(cands.length ? `${cands.length} positions tested` : `No position fits ${o.name} inside its envelope`, null);
   renderPlacements(); scheduleSolve(0);
 }
@@ -2081,6 +2091,7 @@ function renderObjEditor() {
       ${o.kind === 'pond' && o.manual ? '<button class="btn" id="oResetPond">Size back to the planning area</button>' : ''}`;
   }
   let note = S.placeNote && o.id === S.sel ? `<p class="err">${esc(S.placeNote)}</p>` : '';
+  if (S.moveNote && S.moveNote.id === o.id) note += `<div class="search-msg ok">${esc(S.moveNote.text)} <button class="btn sm" id="oUndoMove">Put it back</button></div>`;
   const ex = listF('siteConditions.existingStructures');
   if (o.kind === 'building' && ex.length && !F('siteConditions.demolitionRequired')) note += `<div class="search-msg">${ex.length} existing building${ex.length > 1 ? 's' : ''} (${fmt(ex.reduce((a, p) => a + Math.abs(area(p)), 0))} sf) on this parcel ${ex.length > 1 ? 'are' : 'is'} kept and block${ex.length > 1 ? '' : 's'} parking. <button class="btn sm" id="oDemo">Demolish existing buildings</button></div>`;
   el.innerHTML = `<div class="editor">${note}${body}${o.kind !== 'building' && o.kind !== 'garage' ? '' : '<div class="kv"><span>Footprint</span><b id="oFP"></b></div>'}</div>`;
@@ -2094,6 +2105,7 @@ function renderObjEditor() {
   numIn('#oFl', v => { o.floors = Math.max(1, Math.round(v)); });
   numIn('#oRot', v => { o.rot = ((v % 360) + 360) % 360; });
   numIn('#oGFA', v => { if (v <= 0) return; const k = Math.sqrt(v / o.floors / fpOf(o)); o.w = Math.round(o.w * k * 10) / 10; o.d = Math.round(o.d * k * 10) / 10; });
+  if ($('#oUndoMove')) $('#oUndoMove').addEventListener('click', () => { const m = S.moveNote; Object.assign(o, m.prev); afterObjEdit(); renderObjEditor(); });
   if ($('#oDemo')) $('#oDemo').addEventListener('click', () => { S.F['siteConditions.demolitionRequired'] = true; S.touched.add('siteConditions.demolitionRequired'); rerenderField('siteConditions.demolitionRequired'); renderObjEditor(); onFieldChange('siteConditions.demolitionRequired'); });
   el.querySelectorAll('[data-rot]').forEach(b => b.addEventListener('click', () => { o.rot = (((o.rot - +b.dataset.rot) % 360) + 360) % 360; afterObjEdit(); refreshObjFields(true); }));
   if ($('#oSquare')) $('#oSquare').addEventListener('click', () => { o.rot = nearestEdgeAngle(o); afterObjEdit(); refreshObjFields(true); });
@@ -2105,7 +2117,13 @@ function renderObjEditor() {
     const perLvl = Math.max(1, Math.floor(o.w * o.d / o.sfPerStall)); o.floors = Math.max(1, Math.ceil(short / perLvl)); afterObjEdit(); refreshObjFields(true);
   });
 }
-function afterObjEdit() { S.placeNote = null; refreshObjFields(); renderObjList(); renderReqBreak(); renderYield(); draw(); S.place = []; renderPlacements(); scheduleSolve(); }
+/* After demolition clears the lot, re-test positions for the selected building (or the only one). */
+function resiteAfterDemo() {
+  const o = selObj(), bs = buildings();
+  const t = o && o.kind === 'building' ? o : bs.length === 1 ? bs[0] : null;
+  if (!t) return; S.sel = t.id; renderObjList(); renderObjEditor(); testPlacements({ apply: true });
+}
+function afterObjEdit() { S.placeNote = null; S.moveNote = null; refreshObjFields(); renderObjList(); renderReqBreak(); renderYield(); draw(); S.place = []; renderPlacements(); scheduleSolve(); }
 function refreshObjFields(all) {
   const o = selObj(); if (!o || !$('#oW')) return;
   const set = (id, v) => { const el = $(id); if (el && (all || document.activeElement !== el)) el.value = v; };
@@ -2274,6 +2292,7 @@ function onFieldChange(fid) {
   if (fid === 'siteConditions.demolitionRequired') renderObjEditor();
   if (['zoning', 'parking', 'access'].includes((FIELDS[fid] || {}).section) && (FIELDS[fid].source === 'local_code' || FIELDS[fid].source === 'agency')) markCustom();
   computeEnv(); renderLegend(); renderParcelFacts(); renderReqBreak(); scheduleSolve(); renderAnalysis(); draw();
+  if (fid === 'siteConditions.demolitionRequired' && F(fid) && listF('siteConditions.existingStructures').length) resiteAfterDemo();
 }
 const left = $('#left');
 left.addEventListener('input', (e) => { if (e.target.closest('[data-fid]') && !e.target.matches('select, input[type="checkbox"]')) onFieldEvent(e); });
