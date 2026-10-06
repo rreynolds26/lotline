@@ -302,7 +302,7 @@ async function loadCountyParcel(p) {
       arcQuery(`${CL}/35`, { geom: env, fields: 'CLASS_CODE' }), arcQuery(`${CL}/26`, { geom: env, fields: 'Type,source' }),
       arcQuery(`${CL}/31`, { geom: env, fields: 'NAME,BUFF_DIST' }).catch(() => []), arcQuery(`${CL}/32`, { geom: env, fields: 'DESCRIPTION,BUFF_DIST' }).catch(() => []),
       arcQuery(`${CL}/33`, { geom: env, fields: 'BUFF_DIST' }).catch(() => []), arcQuery(`${CL}/34`, { geom: env }).catch(() => []),
-      arcQuery(`${CL}/2`, { geom: P, fields: 'Type,BLDG_ID' }), arcQuery(`${CL}/15`, { where: `PARCEL_NO='${p.a.PARCEL_NO}'`, geometry: false, fields: 'ImpervAcres,PercentImperv' }).catch(() => []),
+      arcQuery(`${CL}/2`, { geom: P, fields: 'Type,BLDG_ID' }), arcQuery(`${CL}/15`, { where: `PARCEL_NO='${p.a.PARCEL_NO}'`, geometry: false, fields: 'ImpervAcres,PercentImperv,ACRES,Type' }).catch(() => []),
       arcQuery(`${ACC}/ACC_Watersheds/FeatureServer/0`, { geom: P, geometry: false, fields: 'NAME' }).catch(() => []),
     ]);
     const wp = wet.flatMap(f => ringsOf(f.geometry)).map(r => clipPoly(r, site)).filter(Boolean);
@@ -314,9 +314,16 @@ async function loadCountyParcel(p) {
     if (easements.length) { set('parcel.easements', easements, 'County river and state-water buffers'); find('Environment', `River or state-water buffer crosses the parcel: ${[...new Set(easements.map(e => e.note))].join(', ')}. Added as no-build, no-pave areas.`, 'warn'); }
     const bp = bld.flatMap(f => ringsOf(f.geometry)).filter(touchesParcel).map(r => clipPoly(r, site)).filter(Boolean);
     if (bp.length) { set('siteConditions.existingStructures', bp, 'County building footprints'); find('Site', `${bp.length} existing building${bp.length > 1 ? 's' : ''} (${fmt(bp.reduce((s, b) => s + Math.abs(area(b)), 0))} sf of footprint). Turn on “Demolition required” to clear them.`, 'info'); }
-    if (imp[0]) {
-      const pct = +imp[0].attributes.PercentImperv; const frac = pct > 1 ? pct / 100 : pct;
-      if (isFinite(frac)) { const c = frac * num('stormwater.runoffCoefficientImpervious', 0.95) + (1 - frac) * num('stormwater.runoffCoefficientPervious', 0.25); set('stormwater.runoffCoefficientPre', +c.toFixed(2), `${fmt(frac * 100)}% existing impervious`); const ia = +imp[0].attributes.ImpervAcres; find('Site', `Existing impervious cover: ${fmt(frac * 100)}%${ia > 0 ? ` (${fmt(ia, 2)} ac)` : ` (about ${fmt(frac * Math.abs(area(S.parcel)) / 43560, 2)} ac)`}.`); }
+    if (imp.length) {
+      // The county stores one record per surface type (parking, building, sidewalk...); add them up.
+      const siteAc = +imp[0].attributes.ACRES || Math.abs(area(S.parcel)) / 43560;
+      const byType = {}; let ac = 0;
+      for (const r of imp) { const a = +r.attributes.ImpervAcres || 0; ac += a; const t = (r.attributes.Type || 'other').trim(); byType[t] = (byType[t] || 0) + a; }
+      const frac = Math.min(1, ac / siteAc);
+      const c = frac * num('stormwater.runoffCoefficientImpervious', 0.95) + (1 - frac) * num('stormwater.runoffCoefficientPervious', 0.25);
+      set('stormwater.runoffCoefficientPre', +c.toFixed(2), `${fmt(frac * 100)}% existing impervious`);
+      const parts = Object.entries(byType).sort((a, b) => b[1] - a[1]).map(([t, a]) => `${t} ${fmt(a / siteAc * 100, 1)}%`).join(', ');
+      find('Site', `Existing impervious cover: ${fmt(frac * 100)}% (${fmt(ac, 2)} ac): ${esc(parts)}. Redevelopment may get credit for existing impervious area under the stormwater rules.`);
     }
     if (ws[0]) find('Environment', `Watershed: ${esc(ws[0].attributes.NAME)}.`);
   }));
