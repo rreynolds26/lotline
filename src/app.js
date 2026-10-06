@@ -13,6 +13,17 @@ const money = (n) => (n == null || !isFinite(n)) ? '—' : '$' + Math.round(n).t
 const SCHEMA = /*SCHEMA*/null;
 // Lotline-specific inputs that the solver needs but the schema doesn't name. Shown with a "Lotline" tag.
 const APP_FIELDS = {
+  zoning: [
+    { id: 'app.resYardBase', label: 'Building yard where abutting residential', type: 'number', unit: 'ft', default: null, min: 0, max: 200, source: 'local_code', app: true, description: 'Applies to side and rear lot lines that face a residential neighbor. Grows with building height using the next two inputs.' },
+    { id: 'app.resYardHeightStart', label: 'Residential yard grows above height', type: 'number', unit: 'ft', default: null, min: 0, max: 200, source: 'local_code', app: true },
+    { id: 'app.resYardPerFt', label: 'Extra residential yard per ft of height', type: 'number', unit: 'ft', default: null, min: 0, max: 5, source: 'local_code', app: true },
+    { id: 'app.rearYardHeightStart', label: 'Rear yard grows above height', type: 'number', unit: 'ft', default: null, min: 0, max: 200, source: 'local_code', app: true },
+    { id: 'app.rearYardPerFt', label: 'Extra rear yard per ft of height', type: 'number', unit: 'ft', default: null, min: 0, max: 5, source: 'local_code', app: true },
+  ],
+  access: [
+    { id: 'app.bikeMinimum', label: 'Minimum bicycle spaces', type: 'integer', unit: 'spaces', default: null, min: 0, max: 100, source: 'local_code', app: true },
+    { id: 'app.bikePerAutoSpaces', label: 'One bicycle space per N required car spaces', type: 'number', unit: 'spaces', default: null, min: 1, max: 200, source: 'local_code', app: true },
+  ],
   building: [
     { id: 'app.buildingApron', label: 'Walk / landscape apron around buildings', type: 'number', unit: 'ft', default: 10, min: 0, max: 60, source: 'design', app: true, description: 'Kept clear of parking around every building and garage.' },
   ],
@@ -21,6 +32,7 @@ const APP_FIELDS = {
     { id: 'app.aisle60', label: 'One-way aisle at 60°', type: 'number', unit: 'ft', default: 18, min: 10, max: 30, source: 'local_code', app: true },
     { id: 'app.aisle45', label: 'One-way aisle at 45°', type: 'number', unit: 'ft', default: 13, min: 10, max: 30, source: 'local_code', app: true },
     { id: 'app.endDriveLane', label: 'Cross-aisle at row ends', type: 'number', unit: 'ft', default: 24, min: 0, max: 40, source: 'design', app: true, description: 'Drive lane reserved at each end of a parking row so aisles connect to each other.' },
+    { id: 'app.maxParkingPercentOfRequired', label: 'Surface parking cap, % of required', type: 'number', unit: 'percent', default: null, min: 100, max: 500, source: 'local_code', app: true, description: 'Some codes cap surface parking. Garage and EV spaces usually do not count toward the cap.' },
     { id: 'app.reserveADA', label: 'Lay out accessible and EV stalls on the plan', type: 'boolean', default: true, source: 'standard', app: true },
   ],
   process: [
@@ -379,7 +391,10 @@ function computeEnv() {
   const p = ccw(S.parcel); const E = edgeInfo(p);
   const row = num('parcel.rowDedicationDepth');
   const res = new Set(listF('parcel.adjacentUses').filter(a => a.use === 'single_family' || a.use === 'multifamily').map(a => a.side));
-  const bd = E.map(e => e.cls === 'front' ? row + num('zoning.setbackFront') : e.cls === 'rear' ? num('zoning.setbackRear') : num('zoning.setbackSide'));
+  const hMax = Math.max(0, ...buildings().map(o => bnum(o, 'building.height')));
+  const rearAdd = has('app.rearYardPerFt') ? num('app.rearYardPerFt') * Math.max(0, hMax - num('app.rearYardHeightStart')) : 0;
+  const resYard = has('app.resYardBase') ? num('app.resYardBase') + num('app.resYardPerFt') * Math.max(0, hMax - num('app.resYardHeightStart')) : 0;
+  const bd = E.map(e => { const base = e.cls === 'front' ? row + num('zoning.setbackFront') : e.cls === 'rear' ? num('zoning.setbackRear') + rearAdd : num('zoning.setbackSide'); return e.cls !== 'front' && res.has(e.comp) ? Math.max(base, resYard) : base; });
   const pd = E.map(e => {
     if (e.cls === 'front') return row + Math.max(num('zoning.bufferFront'), num('parking.parkingSetbackFromROW'));
     const b = e.cls === 'rear' ? num('zoning.bufferRear') : num('zoning.bufferSide');
@@ -762,6 +777,8 @@ function analyze() {
   add('check.landFit', 'Program fits on buildable land', D['derived.landRequired'] <= D['derived.netBuildableArea'] ? 'pass' : 'fail', `Needs ${fmt(D['derived.landRequired'])} sf (footprint + ${fmt(num('parking.grossAreaPerStall', 325))} sf/stall + loading + pond + reserves) vs ${fmt(D['derived.netBuildableArea'])} sf net buildable`);
   add('check.parkingProvided', 'Parking meets minimum', prov >= req ? 'pass' : 'fail', `${fmt(prov)} provided vs ${fmt(req)} required`);
   if (has('parking.maxRatioPer1000SF') && gfa > 0) add('check.parkingMax', 'Parking under the maximum', prov / (gfa / 1000) <= num('parking.maxRatioPer1000SF') + 1e-9 ? 'pass' : 'fail', `${fmt(prov / (gfa / 1000), 2)} vs max ${fmt(num('parking.maxRatioPer1000SF'), 2)} per 1,000 sf`);
+  if (has('app.maxParkingPercentOfRequired') && req > 0) { const cap = Math.floor(req * num('app.maxParkingPercentOfRequired') / 100); add('check.parkingCap', 'Surface parking under the code maximum', surf <= cap ? 'pass' : 'fail', `${fmt(surf)} surface stalls vs a cap of ${fmt(cap)} (${fmt(num('app.maxParkingPercentOfRequired'))}% of ${fmt(req)} required). Move extra stalls into a garage or drop them.`); }
+  if (has('app.bikePerAutoSpaces') && req > 0) { const need = num('app.bikeMinimum') + Math.ceil(req / Math.max(1, num('app.bikePerAutoSpaces'))); const have = num('access.bikeParkingSpaces'); add('check.bike', 'Bicycle parking meets minimum', have >= need ? 'pass' : 'warn', `${fmt(have)} provided vs ${fmt(need)} required (${fmt(num('app.bikeMinimum'))} + 1 per ${fmt(num('app.bikePerAutoSpaces'))} car spaces). Set Bicycle parking spaces in Access.`); }
   if (L && F('app.reserveADA')) add('check.accessibleParking', 'Accessible parking meets minimum', L.ada.ada.size >= adaReq(prov) && L.ada.van.size >= Math.ceil(adaReq(prov) / 6) ? 'pass' : 'fail', `${L.ada.ada.size} accessible (${L.ada.van.size} van) vs ${adaReq(prov)} (${Math.ceil(adaReq(prov) / 6)} van) for ${fmt(prov)} stalls${gar ? '. Garage accessible stalls are not modeled.' : ''}`);
   else add('check.accessibleParking', 'Accessible parking meets minimum', 'manual', 'Accessible stall layout is turned off');
   const minFFE = D['derived.minFinishedFloorElevation'];
@@ -1699,23 +1716,28 @@ const PROFILES = {
     'zoning.maxHeight': 50, 'zoning.maxStories': 2, 'zoning.maxFAR': 0.6, 'zoning.maxLotCoverage': 55, 'zoning.maxImpervious': 85, 'zoning.minOpenSpace': 15,
     'parking.landscapeIslandInterval': 20, 'access.minDrivewaySpacing': 300, 'access.drivewayWidth': 40 } },
 };
+/*PROFILES*/
 function savedProfiles() { try { return JSON.parse(localStorage.getItem('lotline.profiles') || '{}') || {}; } catch (e) { return {}; } }
 function writeSavedProfiles(o) { try { localStorage.setItem('lotline.profiles', JSON.stringify(o)); return true; } catch (e) { return false; } }
 function renderProfileSelect() {
   const saved = savedProfiles(); const cur = S.P.profile;
-  $('#profile').innerHTML = `<optgroup label="Typical templates">${Object.entries(PROFILES).map(([k, p]) => `<option value="b:${k}" ${cur === 'b:' + k ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</optgroup>` +
+  const groups = {}; for (const [k, p] of Object.entries(PROFILES)) (groups[p.group || 'Typical templates'] ||= []).push([k, p]);
+  $('#profile').innerHTML = Object.entries(groups).map(([g, list]) => `<optgroup label="${esc(g)}">${list.map(([k, p]) => `<option value="b:${k}" ${cur === 'b:' + k ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</optgroup>`).join('') +
     (Object.keys(saved).length ? `<optgroup label="Your saved profiles">${Object.keys(saved).map(k => `<option value="s:${esc(k)}" ${cur === 's:' + k ? 'selected' : ''}>${esc(k)}</option>`).join('')}</optgroup>` : '') +
     `<option value="custom" ${cur === 'custom' ? 'selected' : ''}>Custom (edited)</option>`;
   $('#btnDelProfile').hidden = !String(cur).startsWith('s:');
+  const bp = String(cur).startsWith('b:') ? PROFILES[cur.slice(2)] : null; $('#profileNote').textContent = bp && bp.note ? bp.note : '';
 }
 function markCustom() { if (S.P.profile !== 'custom') { S.P.profile = 'custom'; renderProfileSelect(); } }
 function applyProfile(key) {
-  const profFields = Object.values(FIELDS).filter(f => PROFILE_SOURCES.has(f.source) && !['objectList', 'polygon', 'polygonList', 'polyline', 'polylineList', 'point'].includes(f.type));
+  const KEEP = new Set(['zoning.district', 'zoning.overlays', 'zoning.entitlementPath']);
+  const profFields = Object.values(FIELDS).filter(f => PROFILE_SOURCES.has(f.source) && !KEEP.has(f.id) && !['objectList', 'polygon', 'polygonList', 'polyline', 'polylineList', 'point'].includes(f.type));
   if (key.startsWith('b:')) {
     const p = PROFILES[key.slice(2)]; if (!p) return;
     for (const f of profFields) { delete S.F[f.id]; S.touched.delete(f.id); }
     Object.assign(S.F, clone(p.values));
-    S.uses = defaultUses().map(u => ({ ...u, v: +(u.v * p.usesScale).toFixed(2), vu: +(u.vu * p.usesScale).toFixed(2) }));
+    if (p.verified) for (const k of Object.keys(p.values)) S.touched.add(k);
+    S.uses = p.uses ? clone(p.uses) : defaultUses().map(u => ({ ...u, v: +(u.v * p.usesScale).toFixed(2), vu: +(u.vu * p.usesScale).toFixed(2) }));
   } else if (key.startsWith('s:')) {
     const p = savedProfiles()[key.slice(2)]; if (!p) return;
     for (const [k, v] of Object.entries(p.values || {})) { S.F[k] = v; S.touched.add(k); }

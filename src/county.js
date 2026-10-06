@@ -387,6 +387,13 @@ async function loadCountyParcel(p) {
   await Promise.all(jobs);
   if (CTX.report !== R) return; // another parcel was loaded meanwhile
   R.ms = Math.round(performance.now() - t0);
+  const pkey = accProfileFor(F('zoning.district'));
+  if (pkey) {
+    applyProfile(pkey);
+    for (const [id, v] of R.filled) { S.F[id] = v; S.touched.add(id); }
+    const zf = R.findings.find(x => x.group === 'Zoning' && x.level === 'key');
+    if (zf) zf.text = `Zoned <b>${esc(F('zoning.district'))}</b>. Applied the ${esc(PROFILES[pkey.slice(2)].label)} profile from the ACC zoning code: setbacks, height, FAR, coverage, landscaping, buffers and parking ratios. <a href="${ZONING_CODE_URL}" target="_blank" rel="noopener">Read the code</a>.`;
+  } else if (F('zoning.district')) find('Zoning', `No built-in profile for ${esc(F('zoning.district'))} (planned developments follow their own approved plan). Generic values are still in use.`, 'warn');
   S.P.profile = S.P.profile; syncAutoObjects(true);
   renderAllSections(); computeEnv(); renderParcelFacts(); renderLegend(); renderObjList(); renderObjEditor(); renderReqBreak(); renderAnalysis(); renderSiteData();
   draw(); scheduleSolve(0);
