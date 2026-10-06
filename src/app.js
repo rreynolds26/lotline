@@ -35,6 +35,10 @@ const APP_FIELDS = {
     { id: 'app.maxParkingPercentOfRequired', label: 'Surface parking cap, % of required', type: 'number', unit: 'percent', default: null, min: 100, max: 500, source: 'local_code', app: true, description: 'Some codes cap surface parking. Garage and EV spaces usually do not count toward the cap.' },
     { id: 'app.reserveADA', label: 'Lay out accessible and EV stalls on the plan', type: 'boolean', default: true, source: 'standard', app: true },
   ],
+  stormwater: [
+    { id: 'app.placePond', label: 'Put a stormwater pond on the plan', type: 'boolean', default: false, source: 'design', app: true, description: 'Off by default. Turn on to reserve a pond; parking will avoid it.' },
+    { id: 'app.pondArea', label: 'Pond size on the plan', type: 'number', unit: 'sq_ft', default: null, min: 100, source: 'design', app: true, description: 'Leave blank to size it from "Pond area as share of site". You can also drag its corners on the plan.' },
+  ],
   process: [
     { id: 'app.garageCostPerStall', label: 'Structured parking cost per stall', type: 'number', unit: 'usd', default: null, min: 0, source: 'cost', app: true },
   ],
@@ -554,8 +558,8 @@ function syncAutoObjects(reposition = false) {
   const gross = Math.abs(area(S.parcel));
   const reg = inset(S.parcel, 3) || S.parcel;
   // stormwater pond
-  const pondLike = ['dry_detention', 'wet_pond', 'bioretention', 'infiltration_basin'].includes(F('stormwater.facilityType'));
-  const target = gross * num('stormwater.pondAreaPercentOfSite') / 100;
+  const pondLike = !!F('app.placePond');
+  const target = has('app.pondArea') ? num('app.pondArea') : gross * num('stormwater.pondAreaPercentOfSite') / 100;
   let pond = kindObj('pond')[0];
   if (!pondLike || target < 100 || has('stormwater.pondLocation')) { if (pond) S.objs = S.objs.filter(o => o !== pond); }
   else {
@@ -577,6 +581,7 @@ function syncAutoObjects(reposition = false) {
   // dumpster enclosures
   const nd = Math.max(0, Math.round(num('siteFeatures.dumpsterEnclosures')));
   let dumps = kindObj('dumpster');
+  if (!buildings().length) { S.objs = S.objs.filter(o => o.kind !== 'dumpster'); dumps = []; }
   while (dumps.length > nd) { const x = dumps.pop(); S.objs = S.objs.filter(o => o !== x); }
   for (const d of dumps) { d.w = num('siteFeatures.dumpsterPadWidth', 12); d.d = num('siteFeatures.dumpsterPadDepth', 12); }
   while (dumps.length < nd && buildings().length) {
@@ -707,7 +712,7 @@ function analyze() {
   D['derived.parkingArea'] = req * num('parking.grossAreaPerStall', 325);
   D['derived.loadingArea'] = num('parking.loadingSpaces') * num('parking.loadingSpaceWidth') * num('parking.loadingSpaceLength') + num('parking.dockDoors') * 13 * num('parking.truckCourtDepth');
   const pondObj = kindObj('pond')[0]; const pondPoly = F('stormwater.pondLocation');
-  D['derived.pondArea'] = gross * num('stormwater.pondAreaPercentOfSite') / 100;
+  D['derived.pondArea'] = F('app.placePond') ? (has('app.pondArea') ? num('app.pondArea') : gross * num('stormwater.pondAreaPercentOfSite') / 100) : (has('stormwater.pondLocation') ? Math.abs(area(F('stormwater.pondLocation'))) : 0);
   const pondActual = pondObj ? fpOf(pondObj) : (pondPoly && pondPoly.length >= 3 ? Math.abs(area(pondPoly)) : 0);
   const loadActual = kindObj('loading').reduce((s, o) => s + fpOf(o), 0);
   const dumpArea = kindObj('dumpster').reduce((s, o) => s + fpOf(o), 0);
@@ -1199,6 +1204,7 @@ function drawHandles() {
   ctx.font = `600 11.5px ${TOK.font}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const side = (a, b, txt) => { const ang = Math.atan2(b[1] - a[1], b[0] - a[0]); const nx = Math.sin(ang), ny = -Math.cos(ang); label(txt, (a[0] + b[0]) / 2 + nx * 16, (a[1] + b[1]) / 2 + ny * 16, upright(ang), '#1b1600', TOK.paint); };
   side(poly[0], poly[1], `${fmt(o.w, 1)}'`);
+  ctx.font = `600 11.5px ${TOK.font}`; label(`${fmt(((o.rot % 360) + 360) % 360, 1)}°`, r.h[0], r.h[1] - 18, 0, '#1b1600', TOK.paint);
   side(poly[1], poly[2], `${fmt(o.d, 1)}'`);
 }
 function drawGrid() {
@@ -1319,7 +1325,7 @@ cv.addEventListener('pointermove', (e) => {
     o.w = nw; o.d = nd; o.manual = true;
     const c = rot([sg[0] * nw / 2, sg[1] * nd / 2], o.rot * DEG); o.cx = Fx[0] + c[0]; o.cy = Fx[1] + c[1];
   }
-  if (drag.type === 'rotate') { let a = Math.atan2(w[1] - o.cy, w[0] - o.cx) / DEG - 90; a = e.shiftKey ? Math.round(a / 15) * 15 : Math.round(a); o.rot = ((a % 360) + 360) % 360; }
+  if (drag.type === 'rotate') { let a = Math.atan2(w[1] - o.cy, w[0] - o.cx) / DEG - 90; a = e.shiftKey ? Math.round(a / 15) * 15 : Math.round(a * 2) / 2; o.rot = ((a % 360) + 360) % 360; }
   liveUpdate();
 });
 const endDrag = () => {
@@ -1351,6 +1357,8 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'd') { S.target = null; setMode('draw'); }
   else if (k === 'f') fit();
   else if (k === 'r') rotateSel(e.shiftKey ? -15 : 15);
+  else if ((e.key === '[' || e.key === ']' || e.key === '{' || e.key === '}') && selObj()) { e.preventDefault(); rotateSel((e.key === ']' || e.key === '}' ? -1 : 1) * (e.shiftKey ? 15 : 1)); }
+  else if (e.key.startsWith('Arrow') && selObj()) { e.preventDefault(); const o = selObj(), st = e.shiftKey ? 10 : 1; if (e.key === 'ArrowLeft') o.cx -= st; if (e.key === 'ArrowRight') o.cx += st; if (e.key === 'ArrowUp') o.cy += st; if (e.key === 'ArrowDown') o.cy -= st; liveUpdate(); scheduleSolve(); }
   else if (k === '=' || k === '+') zoomAt(1.25);
   else if (k === '-') zoomAt(0.8);
 });
@@ -1407,14 +1415,45 @@ function updateHint() {
 function rotateSel(d) { const o = selObj() || buildings()[0]; if (!o) return; o.rot = (((o.rot + d) % 360) + 360) % 360; liveUpdate(); scheduleSolve(); }
 
 /* ================= objects panel ================= */
-function addObj(kind) {
+/* Adding a building or garage asks for its size first; nothing is placed with a preset size. */
+function addObj(kind) { S.sel = null; S.adding = kind; renderObjList(); renderObjEditor(); draw(); const g = $('#nGFA') || $('#nW'); if (g) g.focus(); }
+function placeNew() {
+  const kind = S.adding; if (!kind) return;
+  const err = $('#nErr'); const v = (id) => { const x = $(id); const n = x ? parseFloat(x.value) : NaN; return isFinite(n) && n > 0 ? n : null; };
+  const floors = Math.max(1, Math.round(v('#nFl') || 1));
+  let w = v('#nW'), d = v('#nD');
+  if (kind === 'building') {
+    const gfa = v('#nGFA');
+    if (!gfa && !(w && d)) { err.textContent = 'Enter the gross floor area, or both width and depth.'; err.hidden = false; return; }
+    const fp = gfa ? gfa / floors : w * d;
+    if (w && !d) d = fp / w; else if (d && !w) w = fp / d; else if (!w && !d) { w = Math.sqrt(fp * 1.5); d = fp / w; }
+  } else if (!(w && d)) { err.textContent = 'Enter the garage width and depth.'; err.hidden = false; return; }
   computeEnv();
   const reg = S.env.building || S.env.paving || S.parcel; const c = centroid(reg);
-  const o = kind === 'garage' ? newObj('garage', { w: 124, d: 180, floors: 3, sfPerStall: 330 }) : newObj('building', { w: 120, d: 90, use: F('zoning.useType') });
-  o.name = letterName(kind);
-  findSpot(o, c, reg, [o.rot, o.rot + 90]);
-  S.objs.push(o); S.sel = o.id;
-  renderObjList(); renderObjEditor(); renderReqBreak(); draw(); scheduleSolve();
+  const rot = +(($('#nRot') || {}).value) || 0;
+  const o = kind === 'garage' ? newObj('garage', { w, d, floors, sfPerStall: v('#nSF') || 330, rot }) : newObj('building', { w, d, floors, rot, use: ($('#nUse') || {}).value || F('zoning.useType') });
+  o.name = (($('#nName') || {}).value || '').trim() || letterName(kind);
+  findSpot(o, c, reg, [rot]);
+  S.objs.push(o); S.sel = o.id; S.adding = null;
+  syncAutoObjects(); renderObjList(); renderObjEditor(); renderReqBreak(); renderAnalysis(); draw(); scheduleSolve();
+}
+function renderAddForm() {
+  const k = S.adding, isB = k === 'building';
+  return `<div class="editor">
+    <div class="sub" style="margin:0">New ${isB ? 'building' : 'parking garage'}</div>
+    <div class="row"><label class="f"><span>Name</span><input type="text" class="plain" id="nName" placeholder="${esc(letterName(k))}"></label>
+      ${isB ? `<label class="f"><span>Use (sets parking ratio)</span><select id="nUse">${useOptions(F('zoning.useType'))}</select></label>` : `<label class="f"><span>Gross sf per stall</span><div class="unit"><input type="number" id="nSF" value="330" min="200" step="5"><em>sf</em></div></label>`}</div>
+    ${isB ? '<label class="f"><span>Gross floor area</span><div class="unit"><input type="number" id="nGFA" min="100" step="100" placeholder="e.g. 12000"><em>sf</em></div></label>' : ''}
+    <div class="row3">
+      <label class="f"><span>${isB ? 'Stories' : 'Levels'}</span><input type="number" id="nFl" value="${isB ? 1 : 3}" min="1" step="1"></label>
+      <label class="f"><span>Width${isB ? ' (optional)' : ''}</span><div class="unit"><input type="number" id="nW" min="6" step="1"><em>ft</em></div></label>
+      <label class="f"><span>Depth${isB ? ' (optional)' : ''}</span><div class="unit"><input type="number" id="nD" min="6" step="1"><em>ft</em></div></label>
+    </div>
+    <label class="f"><span>Rotation</span><div class="unit"><input type="number" id="nRot" value="0" step="0.5"><em>°</em></div></label>
+    ${isB ? '<p class="note">Give the floor area and Lotline works out a footprint, or set width and depth exactly. You can resize, move and rotate it on the plan afterward.</p>' : ''}
+    <p class="err" id="nErr" hidden></p>
+    <div class="btns"><button class="btn primary" id="nPlace">Place on site</button><button class="btn" id="nCancel">Cancel</button></div>
+  </div>`;
 }
 function removeObj(o) {
   S.objs = S.objs.filter(p => p !== o); if (S.sel === o.id) S.sel = null; S.place = S.place.filter(p => p.objId !== o.id);
@@ -1431,12 +1470,24 @@ function renderObjList() {
 function useOptions(sel) { return S.uses.map(u => `<option value="${esc(u.id)}" ${u.id === sel ? 'selected' : ''}>${esc(u.name)}</option>`).join(''); }
 function renderObjEditor() {
   const o = selObj(); const el = $('#objEditor');
-  if (!o) { el.innerHTML = '<p class="note">Select a building, garage, pond or loading area in the list or on the plan to edit it.</p>'; return; }
+  if (S.adding) {
+    el.innerHTML = renderAddForm();
+    $('#nPlace').addEventListener('click', placeNew); $('#nCancel').addEventListener('click', () => { S.adding = null; renderObjEditor(); });
+    el.querySelectorAll('input').forEach(i => i.addEventListener('keydown', (e) => { if (e.key === 'Enter') placeNew(); }));
+    return;
+  }
+  if (!o) { el.innerHTML = buildings().length ? '<p class="note">Select a building, garage, pond or loading area in the list or on the plan to edit it.</p>' : '<p class="note">No buildings yet. Click <b>+ Building</b> and enter its size.</p>'; return; }
+  const rotTools = `<div class="btns" style="gap:4px">
+      <button class="btn sm" data-rot="-15" title="Rotate 15° counterclockwise">⟲ 15°</button><button class="btn sm" data-rot="-1" title="Rotate 1° counterclockwise">⟲ 1°</button>
+      <button class="btn sm" data-rot="1" title="Rotate 1° clockwise">⟳ 1°</button><button class="btn sm" data-rot="15" title="Rotate 15° clockwise">⟳ 15°</button>
+      <button class="btn sm" id="oSquare" title="Turn it parallel to the closest property line">Square to nearest lot line</button>
+    </div>
+    <p class="note">On the plan: drag the round handle to rotate (Shift snaps to 15°), drag the middle to move. Keyboard: <b>[</b> <b>]</b> rotate 1° (Shift: 15°), arrow keys move 1 ft (Shift: 10 ft).</p>`;
   const dims = `<div class="row3">
       <label class="f"><span>Width</span><div class="unit"><input type="number" id="oW" min="6" step="1"><em>ft</em></div></label>
       <label class="f"><span>Depth</span><div class="unit"><input type="number" id="oD" min="6" step="1"><em>ft</em></div></label>
-      <label class="f"><span>Rotation</span><div class="unit"><input type="number" id="oRot" step="1"><em>°</em></div></label>
-    </div>`;
+      <label class="f"><span>Rotation</span><div class="unit"><input type="number" id="oRot" step="0.5"><em>°</em></div></label>
+    </div>${rotTools}`;
   let body = '';
   if (o.kind === 'building') {
     body = `<div class="row"><label class="f"><span>Name</span><input type="text" class="plain" id="oName" value="${esc(o.name)}"></label><label class="f"><span>Use (sets parking ratio)</span><select id="oUse">${useOptions(o.use)}</select></label></div>
@@ -1467,6 +1518,8 @@ function renderObjEditor() {
   numIn('#oFl', v => { o.floors = Math.max(1, Math.round(v)); });
   numIn('#oRot', v => { o.rot = ((v % 360) + 360) % 360; });
   numIn('#oGFA', v => { if (v <= 0) return; const k = Math.sqrt(v / o.floors / fpOf(o)); o.w = Math.round(o.w * k * 10) / 10; o.d = Math.round(o.d * k * 10) / 10; });
+  el.querySelectorAll('[data-rot]').forEach(b => b.addEventListener('click', () => { o.rot = (((o.rot - +b.dataset.rot) % 360) + 360) % 360; afterObjEdit(); refreshObjFields(true); }));
+  if ($('#oSquare')) $('#oSquare').addEventListener('click', () => { o.rot = nearestEdgeAngle(o); afterObjEdit(); refreshObjFields(true); });
   if ($('#oAlign')) $('#oAlign').addEventListener('click', () => { o.rot = longestEdgeAngle(); afterObjEdit(); refreshObjFields(true); });
   if ($('#oDel')) $('#oDel').addEventListener('click', () => removeObj(o));
   if ($('#oResetPond')) $('#oResetPond').addEventListener('click', () => { o.manual = false; syncAutoObjects(); renderObjEditor(); afterObjEdit(); });
@@ -1487,12 +1540,18 @@ function refreshObjFields(all) {
   }
   const fp = $('#oFP'); if (fp) fp.textContent = `${fmt(fpOf(o))} sf · ${fmt(o.w, 1)}' × ${fmt(o.d, 1)}'`;
 }
+function nearestEdgeAngle(o) {
+  const P = S.parcel; let best = null;
+  for (let i = 0; i < P.length; i++) { const a = P[i], b = P[(i + 1) % P.length]; const d = segDist([o.cx, o.cy], a, b); if (!best || d < best.d) best = { d, ang: Math.atan2(b[1] - a[1], b[0] - a[0]) / DEG }; }
+  let r = ((best.ang % 180) + 180) % 180; const cur = ((o.rot % 180) + 180) % 180; if (Math.abs(r + 90 - cur) < Math.abs(r - cur) && r + 90 < 180) r += 90;
+  return Math.round(r * 100) / 100;
+}
 function longestEdgeAngle() {
   let best = 0, ang = 0; const P = S.parcel;
   for (let i = 0; i < P.length; i++) { const a = P[i], b = P[(i + 1) % P.length]; const L = Math.hypot(b[0] - a[0], b[1] - a[1]); if (L > best) { best = L; ang = Math.atan2(b[1] - a[1], b[0] - a[0]) / DEG; } }
   return Math.round((((ang % 180) + 180) % 180) * 100) / 100;
 }
-$('#objList').addEventListener('click', (e) => { const b = e.target.closest('.obj'); if (!b) return; S.sel = +b.dataset.id; renderObjList(); renderObjEditor(); draw(); });
+$('#objList').addEventListener('click', (e) => { const b = e.target.closest('.obj'); if (!b) return; S.adding = null; S.sel = +b.dataset.id; renderObjList(); renderObjEditor(); draw(); });
 $('#btnAddB').addEventListener('click', () => addObj('building'));
 $('#btnAddG').addEventListener('click', () => addObj('garage'));
 
@@ -1630,7 +1689,8 @@ function setField(fid, ctx, v) {
 }
 function onFieldChange(fid) {
   if (fid === 'zoning.useType') applyUsePreset(F('zoning.useType'));
-  if (/^(stormwater\.(facilityType|pondAreaPercentOfSite|pondLocation)|parking\.(loadingSpaces|loadingSpaceWidth|loadingSpaceLength|dockDoors|truckCourtDepth)|siteFeatures\.dumpster)/.test(fid) || fid === 'siteConditions.lowPointLocation' || fid === 'siteConditions.slopeDirection') {
+  if (fid === 'app.pondArea') { const p = kindObj('pond')[0]; if (p) p.manual = false; }
+  if (fid === 'app.placePond' || fid === 'app.pondArea' || /^(stormwater\.(facilityType|pondAreaPercentOfSite|pondLocation)|parking\.(loadingSpaces|loadingSpaceWidth|loadingSpaceLength|dockDoors|truckCourtDepth)|siteFeatures\.dumpster)/.test(fid) || fid === 'siteConditions.lowPointLocation' || fid === 'siteConditions.slopeDirection') {
     syncAutoObjects(fid === 'siteConditions.lowPointLocation' || fid === 'siteConditions.slopeDirection'); renderObjList();
   }
   if (fid === 'access.postedSpeed') rerenderField('access.sightDistanceRequired');
@@ -2052,7 +2112,7 @@ $('#btnNew').addEventListener('click', () => {
   if (b.dataset.armed !== '1') { b.dataset.armed = '1'; b.textContent = 'Click again to clear'; setTimeout(() => { b.dataset.armed = ''; b.textContent = 'Start over'; }, 2500); return; }
   b.dataset.armed = ''; b.textContent = 'Start over';
   try { localStorage.removeItem('lotline.v3'); } catch (e) { /* ignore */ }
-  S.F = {}; S.touched = new Set(); S.uses = defaultUses(); S.parcel = ccw(SAMPLES.pad); S.geo = null; S.objs = [defaultBuilding()]; S.P.profile = 'b:typical'; S.sel = S.objs[0].id;
+  S.F = {}; S.touched = new Set(); S.uses = defaultUses(); S.parcel = ccw(SAMPLES.pad); S.geo = null; S.objs = []; S.P.profile = 'b:typical'; S.sel = null;
   boot(true);
 });
 
@@ -2083,7 +2143,7 @@ function load() {
   try {
     const d = JSON.parse(localStorage.getItem('lotline.v3') || 'null');
     if (d && Array.isArray(d.parcel) && d.parcel.length >= 3 && Array.isArray(d.objs)) {
-      S.parcel = ccw(d.parcel); S.F = d.F || {}; S.touched = new Set(d.touched || []); S.objs = d.objs.map(o => ({ props: {}, ...o })); S.uses = d.uses && d.uses.length ? d.uses : S.uses; S.P = { ...S.P, ...d.P }; S.geo = d.geo || null; S.ctxSaved = d.ctx || null;
+      S.parcel = ccw(d.parcel); S.F = d.F || {}; S.touched = new Set(d.touched || []); S.objs = d.objs.map(o => ({ props: {}, ...o })).filter(o => !(o.kind === 'building' && o.w === 179 && o.d === 112 && o.floors === 1 && !Object.keys(o.props).length)); // drop the old preset sample building S.uses = d.uses && d.uses.length ? d.uses : S.uses; S.P = { ...S.P, ...d.P }; S.geo = d.geo || null; S.ctxSaved = d.ctx || null;
       nextId = S.objs.reduce((m, o) => Math.max(m, o.id), 0) + 1;
       return true;
     }
@@ -2105,7 +2165,7 @@ function boot(refit) {
 }
 // File downloads only work when the page runs on its own, not embedded in a viewer.
 if (window.self !== window.top) $('#btnDownloadJSON').hidden = true;
-if (!load()) { S.objs = [defaultBuilding()]; }
+if (!load()) { S.objs = []; }
 S.sel = (buildings()[0] || S.objs[0] || {}).id ?? null;
 readTokens();
 new ResizeObserver(resize).observe($('#stage'));
