@@ -242,7 +242,9 @@ async function loadCountyParcel(p) {
     for (const e of E) {
       const m = [(e.a[0] + e.b[0]) / 2, (e.a[1] + e.b[1]) / 2]; let near = null;
       for (const r of CTX.roads) for (let i = 1; i < r.pts.length; i++) { const d = segDist(m, r.pts[i - 1], r.pts[i]); if (!near || d < near.d) near = { d, r, a: r.pts[i - 1], b: r.pts[i] }; }
-      if (!near || near.d > 90 || e.len < 20) continue;
+      // Wide arterials put their centerline farther from the lot line than local streets do.
+      const lim = near && ['major_arterial', 'minor_arterial', 'state_route'].includes(near.r.cls) ? 140 : 90;
+      if (!near || near.d > lim || e.len < 20) continue;
       const u1 = [(e.b[0] - e.a[0]) / e.len, (e.b[1] - e.a[1]) / e.len], L2 = Math.hypot(near.b[0] - near.a[0], near.b[1] - near.a[1]) || 1; const u2 = [(near.b[0] - near.a[0]) / L2, (near.b[1] - near.a[1]) / L2];
       if (Math.abs(u1[0] * u2[0] + u1[1] * u2[1]) < 0.6) continue;
       fronts.push({ e, road: near.r }); const score = ROAD_RANK[near.r.cls] * 10000 + e.len; if (!best || score > best.score) best = { score, e, road: near.r };

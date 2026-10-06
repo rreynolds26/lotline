@@ -32,6 +32,8 @@ const APP_FIELDS = {
     { id: 'app.aisle60', label: 'One-way aisle at 60°', type: 'number', unit: 'ft', default: 18, min: 10, max: 30, source: 'local_code', app: true },
     { id: 'app.aisle45', label: 'One-way aisle at 45°', type: 'number', unit: 'ft', default: 13, min: 10, max: 30, source: 'local_code', app: true },
     { id: 'app.endDriveLane', label: 'Cross-aisle at row ends', type: 'number', unit: 'ft', default: 24, min: 0, max: 40, source: 'design', app: true, description: 'Drive lane reserved at each end of a parking row so aisles connect to each other.' },
+    { id: 'app.parkingGoal', label: 'Parking to lay out', type: 'enum', options: ['required', 'maximum'], default: 'required', source: 'design', app: true, description: 'Required: draw only the stalls the code requires, closest to the buildings. Maximum: fill the site to show its full capacity.' },
+    { id: 'app.parkingCushion', label: 'Extra stalls beyond required', type: 'number', unit: 'percent', default: 0, min: 0, max: 200, source: 'design', app: true, description: 'Adds a cushion above the code minimum when laying out only the required parking.' },
     { id: 'app.maxParkingPercentOfRequired', label: 'Surface parking cap, % of required', type: 'number', unit: 'percent', default: null, min: 100, max: 500, source: 'local_code', app: true, description: 'Some codes cap surface parking. Garage and EV spaces usually do not count toward the cap.' },
     { id: 'app.reserveADA', label: 'Lay out accessible and EV stalls on the plan', type: 'boolean', default: true, source: 'standard', app: true },
   ],
@@ -246,7 +248,7 @@ function layoutOne(rR, rO, alpha, offFrac, P, compactT) {
       }
     }
   }
-  const stalls = [], aisles = [], islands = [], rows = [];
+  const stalls = [], aisles = [], islands = [], rows = [], islandRows = [];
   let cLeft = compactT || 0, paved = 0, maxDead = 0;
   for (let k = 0; k < mods.length; k++) {
     const m = mods[k];
@@ -271,13 +273,13 @@ function layoutOne(rR, rO, alpha, offFrac, P, compactT) {
           x = nx;
           if (x + sw > hi + 1e-6) break;
           const dep = useC ? C.Dp : Dp, ln = useC ? C.lean : lean, yb = yf + dir * dep;
-          const st = { poly: [[x, yf], [x + sw, yf], [x + sw + ln, yb], [x + ln, yb]], x, w: sw, compact: useC, row: rows.length - 1, j: row.length };
+          const st = { poly: [[x, yf], [x + sw, yf], [x + sw + ln, yb], [x + ln, yb]], x, w: sw, compact: useC, row: rows.length - 1, j: row.length, run: aisles.length - 1 };
           stalls.push(st); row.push(st); paved += sw * Dp;
           if (useC) cLeft--;
           cnt++; x += sw;
           if (P.islandEvery > 0 && cnt % P.islandEvery === 0) {
             const iw = g.iw, yb2 = yf + dir * Dp;
-            if (x + iw <= hi + 1e-6 && fits(F, x, x + iw + lean)) islands.push([[x, yf], [x + iw, yf], [x + iw + lean, yb2], [x + lean, yb2]]);
+            if (x + iw <= hi + 1e-6 && fits(F, x, x + iw + lean)) { islands.push([[x, yf], [x + iw, yf], [x + iw + lean, yb2], [x + lean, yb2]]); islandRows.push(rows.length - 1); }
             x += iw; cnt = 0;
           }
         }
@@ -285,7 +287,7 @@ function layoutOne(rR, rO, alpha, offFrac, P, compactT) {
     }
   }
   for (const c of connectors) paved += (c.r[2] - c.r[0]) * (c.r[3] - c.r[1]);
-  return { stalls, aisles, connectors: connectors.map(c => c.r), islands, rows, g, paved, oneWay: alpha !== 90, compact: (compactT || 0) - cLeft, maxDead };
+  return { stalls, aisles, connectors: connectors.map(c => c.r), islands, islandRows, rows, g, paved, E, oneWay: alpha !== 90, compact: (compactT || 0) - cLeft, maxDead };
 }
 
 function toWorldLayout(L, theta) {
@@ -595,7 +597,47 @@ let gen = 0, solveTimer = 0;
 const tick = () => new Promise(r => setTimeout(r, 0));
 function setStatus(t, frac) { $('#statusText').textContent = t; $('#statusBar').style.width = frac == null ? '0' : (frac * 100).toFixed(0) + '%'; }
 function scheduleSolve(delay = 200) { clearTimeout(solveTimer); solveTimer = setTimeout(runSearch, delay); save(); }
+/* How many stalls to draw when laying out only what's required: the requirement less garage stalls,
+   plus stalls that become accessible-stall access aisles, plus the optional cushion. */
+function parkingTarget() {
+  if (F('app.parkingGoal') === 'maximum') return Infinity;
+  const req = required(); if (!req) return 0;
+  const need = Math.max(0, Math.ceil(req * (1 + num('app.parkingCushion') / 100)) - garageTotal());
+  return need + (F('app.reserveADA') ? Math.ceil(adaReq(req) / 2) : 0);
+}
+/* Keep the `keep` stalls nearest the buildings and shorten or drop the aisles, cross-aisles and islands they no longer use. Works in the rotated frame. */
+function trimLayout(L, keep, theta) {
+  if (keep >= L.stalls.length) return L;
+  const bs = S.objs.filter(o => APRON_KINDS.has(o.kind)).map(o => objPoly(o).map(p => rot(p, -theta * DEG)));
+  const c0 = rot(centroid(S.parcel), -theta * DEG);
+  const dist = (st) => { const p = st.poly; const c = [(p[0][0] + p[2][0]) / 2, (p[0][1] + p[2][1]) / 2]; return bs.length ? Math.min(...bs.map(b => polyDist(c, b))) : Math.hypot(c[0] - c0[0], c[1] - c0[1]); };
+  const order = L.stalls.map((st, i) => ({ i, d: dist(st) })).sort((a, b) => a.d - b.d);
+  const maxCompact = Math.floor(keep * num('parking.compactPercent') / 100); let nc = 0; const keepSet = new Set();
+  for (const o of order) { if (keepSet.size >= keep) break; if (L.stalls[o.i].compact) { if (nc >= maxCompact) continue; nc++; } keepSet.add(o.i); }
+  const stalls = L.stalls.filter((st, i) => keepSet.has(i));
+  const span = {};
+  for (const st of stalls) { const r = span[st.run] || (span[st.run] = [Infinity, -Infinity]); r[0] = Math.min(r[0], st.x); r[1] = Math.max(r[1], st.x + st.w + L.g.lean); }
+  const aisles = [], keptIdx = {};
+  L.aisles.forEach((a, k) => { const sp = span[k]; if (!sp) return; const x0 = Math.max(a[0], sp[0] - L.E), x1 = Math.min(a[2], sp[1] + L.E); keptIdx[k] = [x0, x1, a]; aisles.push([x0, a[1], x1, a[3]]); });
+  const kept = Object.values(keptIdx);
+  const connectors = L.connectors.filter(c => { const lo = kept.find(([x0, x1, a]) => Math.abs(a[3] - c[1]) < 0.01 && c[0] < x1 && c[2] > x0), hi = kept.find(([x0, x1, a]) => Math.abs(a[1] - c[3]) < 0.01 && c[0] < x1 && c[2] > x0); return lo && hi; });
+  const rowSpan = {}; for (const st of stalls) { const r = rowSpan[st.row] || (rowSpan[st.row] = [Infinity, -Infinity]); r[0] = Math.min(r[0], st.x); r[1] = Math.max(r[1], st.x + st.w); }
+  const islands = L.islands.filter((p, k) => { const rs = rowSpan[L.islandRows[k]]; return rs && p[0][0] >= rs[0] - 1 && p[0][0] <= rs[1] + 1; });
+  // renumber rows so neighbor lookups (accessible-stall aisles) still work
+  const rows = L.rows.map(r => r.filter(st => stalls.includes(st)));
+  for (const r of rows) r.forEach((st, j) => { st.j = j; });
+  let paved = stalls.length * L.g.s * L.g.Dp;
+  for (const a of aisles) paved += (a[2] - a[0]) * (a[3] - a[1]);
+  for (const c of connectors) paved += (c[2] - c[0]) * (c[3] - c[1]);
+  let maxDead = 0;
+  for (const a of aisles) { const touch = (x0, x1) => connectors.some(c => (Math.abs(c[1] - a[3]) < 0.01 || Math.abs(c[3] - a[1]) < 0.01) && c[0] < x1 && c[2] > x0); if (!(touch(a[0], a[0] + L.E + 1) && touch(a[2] - L.E - 1, a[2]))) maxDead = Math.max(maxDead, a[2] - a[0]); }
+  return { ...L, stalls, aisles, connectors, islands, islandRows: [], rows, paved, maxDead, compact: stalls.filter(st => st.compact).length, trimmedFrom: L.stalls.length };
+}
 function finishScenario(r, aligned) {
+  const capacity = r.count;
+  const target = parkingTarget();
+  if (target < r.count) { const copy = { ...r.L, stalls: r.L.stalls.map(st => ({ ...st })) }; copy.rows = r.L.rows.map(row => row.map(st => copy.stalls[r.L.stalls.indexOf(st)])); r = { ...r, L: trimLayout(copy, target, r.theta), count: Math.min(r.count, target) }; }
+  r.capacity = capacity;
   const W = toWorldLayout(r.L, r.theta * DEG);
   const spec = assignSpecial(W, r.count + garageTotal());
   return { ...r, W, ada: spec, eff: r.count - spec.access.size, aligned };
@@ -637,9 +679,11 @@ async function runSearch() {
   }
   for (const a of al) if (!picked.some(p => p.alpha === a)) { const b = results.find(r => r.alpha === a); if (b) picked.push(b); }
   const edges = edgeAngles(S.parcel);
-  S.scen = picked.map(r => finishScenario(r, edges.some(e => Math.min(Math.abs(e - r.theta), 180 - Math.abs(e - r.theta)) < 0.6))).sort((a, b) => b.eff - a.eff);
+  const goalReq = F('app.parkingGoal') !== 'maximum', needEff = Math.max(0, required() - garageTotal());
+  S.scen = picked.map(r => finishScenario(r, edges.some(e => Math.min(Math.abs(e - r.theta), 180 - Math.abs(e - r.theta)) < 0.6)))
+    .sort((a, b) => goalReq ? ((b.eff >= needEff) - (a.eff >= needEff)) || (a.eff >= needEff ? a.W.paved - b.W.paved : b.eff - a.eff) : b.eff - a.eff);
   const pref = +F('parking.stallAngle') || 90;
-  S.layout = S.scen.find(s => s.alpha === pref) || S.scen[0] || null;
+  S.layout = S.scen.find(s => s.alpha === pref && (!goalReq || s.eff >= needEff)) || S.scen[0] || null;
   setStatus(`${fmt(jobs.length * 15 * (P.compactPct > 0 ? 2 : 1))} layouts tested`, null);
   renderResults(); draw();
 }
@@ -829,7 +873,8 @@ function analyze() {
     const ok = tallFire.every(o => { const p = objPoly(o); return [0, 1, 2, 3].some(k => { const a = p[k], b = p[(k + 1) % 4]; let hit = 0; for (let j = 0; j <= 10; j++) { const q = [a[0] + (b[0] - a[0]) * j / 10, a[1] + (b[1] - a[1]) * j / 10]; if (wide.some(l => polyDist(q, l.poly) <= 30)) hit++; } return hit >= 10; }); });
     add('check.aerialAccess', 'Aerial access provided where required', ok ? 'pass' : 'fail', ok ? `A ${fmt(aw)} ft lane runs along one full side` : `${tallFire.map(o => o.name).join(', ')} need a ${fmt(aw)} ft aerial lane within 30 ft of one full side. Widen the 90° aisle to ${fmt(aw)} ft or add a lane.`);
   }
-  if (L) add('check.deadEnd', 'Dead ends have turnarounds', F('fire.turnaroundType') !== 'none' || L.W.maxDead <= num('fire.deadEndMaxLength', 150) ? 'pass' : 'fail', `Longest aisle not connected at both ends: ${fmt(L.W.maxDead)} ft vs ${fmt(num('fire.deadEndMaxLength', 150))} ft. Driveway connections are not counted.`);
+  if (L && !dws.length && F('fire.turnaroundType') === 'none' && L.W.maxDead > num('fire.deadEndMaxLength', 150)) add('check.deadEnd', 'Dead ends have turnarounds', 'need', `An aisle runs ${fmt(L.W.maxDead)} ft without a connection at both ends (limit ${fmt(num('fire.deadEndMaxLength', 150))} ft). Place your driveways in Access & circulation, or pick a turnaround type in Fire access.`);
+  else if (L) add('check.deadEnd', 'Dead ends have turnarounds', F('fire.turnaroundType') !== 'none' || L.W.maxDead <= num('fire.deadEndMaxLength', 150) ? 'pass' : 'fail', `Longest aisle not connected at both ends: ${fmt(L.W.maxDead)} ft vs ${fmt(num('fire.deadEndMaxLength', 150))} ft. Driveway connections are not counted.`);
   const hyds = S.ctx && S.ctx.hydrants || [];
   if (hyds.length && bs.length) {
     const spr = bs.every(o => bget(o, 'building.sprinklered'));
@@ -1431,12 +1476,19 @@ function placeNew() {
     if (w && !d) d = fp / w; else if (d && !w) w = fp / d; else if (!w && !d) { w = Math.sqrt(fp * 1.5); d = fp / w; }
   } else if (!(w && d)) { err.textContent = 'Enter the garage width and depth.'; err.hidden = false; return; }
   computeEnv();
-  const reg = S.env.building || S.env.paving || S.parcel; const c = centroid(reg);
-  const rot = +(($('#nRot') || {}).value) || 0;
+  const reg = S.env.building || S.env.paving || S.parcel; const c0 = centroid(reg);
+  // Aim for the rear of the lot so the frontage is left for parking and access.
+  const fr = S.env.edges.filter(e => e.cls === 'front'); let target = c0;
+  if (fr.length) { const n = fr.reduce((a, e) => [a[0] + (e.b[1] - e.a[1]), a[1] - (e.b[0] - e.a[0])], [0, 0]); const L = Math.hypot(n[0], n[1]) || 1; const bb = bbox(reg); const reach = Math.min(bb.x1 - bb.x0, bb.y1 - bb.y0) * 0.25; target = [c0[0] - n[0] / L * reach, c0[1] - n[1] / L * reach]; }
+  const rotIn = (($('#nRot') || {}).value || '').trim();
+  const lot = fr.length ? ((Math.atan2(fr[0].b[1] - fr[0].a[1], fr[0].b[0] - fr[0].a[0]) / DEG) % 180 + 180) % 180 : longestEdgeAngle();
+  const rots = rotIn !== '' ? [+rotIn || 0] : uniqAngles([lot, lot + 90, longestEdgeAngle(), longestEdgeAngle() + 90, 0, 90]);
+  const rot = rots[0];
   const o = kind === 'garage' ? newObj('garage', { w, d, floors, sfPerStall: v('#nSF') || 330, rot }) : newObj('building', { w, d, floors, rot, use: ($('#nUse') || {}).value || F('zoning.useType') });
   o.name = (($('#nName') || {}).value || '').trim() || letterName(kind);
-  findSpot(o, c, reg, [rot]);
+  const ok = findSpot(o, target, reg, rots);
   S.objs.push(o); S.sel = o.id; S.adding = null;
+  S.placeNote = ok ? null : `${o.name} doesn't fit inside the setback lines at ${fmt(o.w)}' × ${fmt(o.d)}'. It's placed as close as possible; make it smaller, change its proportions, or drag it.`;
   syncAutoObjects(); renderObjList(); renderObjEditor(); renderReqBreak(); renderAnalysis(); draw(); scheduleSolve();
 }
 function renderAddForm() {
@@ -1451,7 +1503,7 @@ function renderAddForm() {
       <label class="f"><span>Width${isB ? ' (optional)' : ''}</span><div class="unit"><input type="number" id="nW" min="6" step="1"><em>ft</em></div></label>
       <label class="f"><span>Depth${isB ? ' (optional)' : ''}</span><div class="unit"><input type="number" id="nD" min="6" step="1"><em>ft</em></div></label>
     </div>
-    <label class="f"><span>Rotation</span><div class="unit"><input type="number" id="nRot" value="0" step="0.5"><em>°</em></div></label>
+    <label class="f"><span>Rotation (blank = line up with the lot)</span><div class="unit"><input type="number" id="nRot" placeholder="auto" step="0.5"><em>°</em></div></label>
     ${isB ? '<p class="note">Give the floor area and Lotline works out a footprint, or set width and depth exactly. You can resize, move and rotate it on the plan afterward.</p>' : ''}
     <p class="err" id="nErr" hidden></p>
     <div class="btns"><button class="btn primary" id="nPlace">Place on site</button><button class="btn" id="nCancel">Cancel</button></div>
@@ -1509,7 +1561,10 @@ function renderObjEditor() {
       <p class="note">Sized from <b>${src}</b>. Drag it where it belongs; it keeps parking clear.${o.kind === 'pond' ? ' Resizing it by hand stops auto-sizing.' : ''}</p>
       ${o.kind === 'pond' && o.manual ? '<button class="btn" id="oResetPond">Size back to the planning area</button>' : ''}`;
   }
-  el.innerHTML = `<div class="editor">${body}${o.kind !== 'building' && o.kind !== 'garage' ? '' : '<div class="kv"><span>Footprint</span><b id="oFP"></b></div>'}</div>`;
+  let note = S.placeNote && o.id === S.sel ? `<p class="err">${esc(S.placeNote)}</p>` : '';
+  const ex = listF('siteConditions.existingStructures');
+  if (o.kind === 'building' && ex.length && !F('siteConditions.demolitionRequired')) note += `<div class="search-msg">${ex.length} existing building${ex.length > 1 ? 's' : ''} (${fmt(ex.reduce((a, p) => a + Math.abs(area(p)), 0))} sf) on this parcel ${ex.length > 1 ? 'are' : 'is'} kept and block${ex.length > 1 ? '' : 's'} parking. <button class="btn sm" id="oDemo">Demolish existing buildings</button></div>`;
+  el.innerHTML = `<div class="editor">${note}${body}${o.kind !== 'building' && o.kind !== 'garage' ? '' : '<div class="kv"><span>Footprint</span><b id="oFP"></b></div>'}</div>`;
   refreshObjFields(true);
   const numIn = (id, fn) => { const x = $(id); if (x) x.addEventListener('input', (e) => { const v = parseFloat(e.target.value); if (!isFinite(v)) return; fn(v); afterObjEdit(); }); };
   if ($('#oName')) $('#oName').addEventListener('input', (e) => { o.name = e.target.value || o.kind; renderObjList(); draw(); save(); });
@@ -1520,6 +1575,7 @@ function renderObjEditor() {
   numIn('#oFl', v => { o.floors = Math.max(1, Math.round(v)); });
   numIn('#oRot', v => { o.rot = ((v % 360) + 360) % 360; });
   numIn('#oGFA', v => { if (v <= 0) return; const k = Math.sqrt(v / o.floors / fpOf(o)); o.w = Math.round(o.w * k * 10) / 10; o.d = Math.round(o.d * k * 10) / 10; });
+  if ($('#oDemo')) $('#oDemo').addEventListener('click', () => { S.F['siteConditions.demolitionRequired'] = true; S.touched.add('siteConditions.demolitionRequired'); rerenderField('siteConditions.demolitionRequired'); renderObjEditor(); onFieldChange('siteConditions.demolitionRequired'); });
   el.querySelectorAll('[data-rot]').forEach(b => b.addEventListener('click', () => { o.rot = (((o.rot - +b.dataset.rot) % 360) + 360) % 360; afterObjEdit(); refreshObjFields(true); }));
   if ($('#oSquare')) $('#oSquare').addEventListener('click', () => { o.rot = nearestEdgeAngle(o); afterObjEdit(); refreshObjFields(true); });
   if ($('#oAlign')) $('#oAlign').addEventListener('click', () => { o.rot = longestEdgeAngle(); afterObjEdit(); refreshObjFields(true); });
@@ -1530,7 +1586,7 @@ function renderObjEditor() {
     const perLvl = Math.max(1, Math.floor(o.w * o.d / o.sfPerStall)); o.floors = Math.max(1, Math.ceil(short / perLvl)); afterObjEdit(); refreshObjFields(true);
   });
 }
-function afterObjEdit() { refreshObjFields(); renderObjList(); renderReqBreak(); renderYield(); draw(); S.place = []; renderPlacements(); scheduleSolve(); }
+function afterObjEdit() { S.placeNote = null; refreshObjFields(); renderObjList(); renderReqBreak(); renderYield(); draw(); S.place = []; renderPlacements(); scheduleSolve(); }
 function refreshObjFields(all) {
   const o = selObj(); if (!o || !$('#oW')) return;
   const set = (id, v) => { const el = $(id); if (el && (all || document.activeElement !== el)) el.value = v; };
@@ -1696,6 +1752,7 @@ function onFieldChange(fid) {
     syncAutoObjects(fid === 'siteConditions.lowPointLocation' || fid === 'siteConditions.slopeDirection'); renderObjList();
   }
   if (fid === 'access.postedSpeed') rerenderField('access.sightDistanceRequired');
+  if (fid === 'siteConditions.demolitionRequired') renderObjEditor();
   if (['zoning', 'parking', 'access'].includes((FIELDS[fid] || {}).section) && (FIELDS[fid].source === 'local_code' || FIELDS[fid].source === 'agency')) markCustom();
   computeEnv(); renderLegend(); renderParcelFacts(); renderReqBreak(); renderAnalysis(); draw(); scheduleSolve();
 }
@@ -1875,7 +1932,7 @@ function renderScenList() {
   if (!S.scen.length) { list.innerHTML = '<p class="note">No surface parking fits. Check the buffers, stall sizes, or parcel shape.</p>'; return; }
   list.innerHTML = S.scen.map((s, i) => {
     const d = s.eff + gar - req;
-    return `<button class="card" data-i="${i}" aria-pressed="${S.layout === s}"><span class="rk">${String.fromCharCode(65 + i)}</span><span class="t">${scenTitle(s)}${s.alpha === pref ? ' · preferred' : ''}</span><span class="n">${fmt(s.eff + gar)}<em class="${d >= 0 ? 'ok' : 'bad'}">${d >= 0 ? '+' : '−'}${fmt(Math.abs(d))} vs req</em></span><span class="s">${fmt(s.eff)} surface${gar ? ` + ${fmt(gar)} garage` : ''} · ${fmt(s.W.paved / Math.max(1, s.eff))} sf/stall${s.W.compact ? ` · ${s.W.compact} compact` : ''}</span></button>`;
+    return `<button class="card" data-i="${i}" aria-pressed="${S.layout === s}"><span class="rk">${String.fromCharCode(65 + i)}</span><span class="t">${scenTitle(s)}${s.alpha === pref ? ' · preferred' : ''}</span><span class="n">${fmt(s.eff + gar)}<em class="${d >= 0 ? 'ok' : 'bad'}">${d >= 0 ? '+' : '−'}${fmt(Math.abs(d))} vs req</em></span><span class="s">${fmt(s.eff)} surface${s.capacity > s.count ? ` (room for ${fmt(s.capacity)})` : ''}${gar ? ` + ${fmt(gar)} garage` : ''} · ${fmt(s.W.paved / Math.max(1, s.eff))} sf/stall${s.W.compact ? ` · ${s.W.compact} compact` : ''}</span></button>`;
   }).join('');
 }
 function renderResults() { renderYield(); renderScenList(); renderAnalysis(); renderLegend(); }
@@ -2183,7 +2240,7 @@ function archiveSite() {
 function clearSite(keepBuildings) {
   const kept = keepBuildings ? S.objs.filter(o => APRON_KINDS.has(o.kind)) : [];
   if (typeof resetCountyContext === 'function') resetCountyContext();
-  for (const f of Object.values(FIELDS)) if (['polygon', 'polyline', 'polygonList', 'polylineList', 'point', 'objectList'].includes(f.type) || f.source === 'survey' || ['zoning.district', 'zoning.overlays', 'zoning.entitlementPath'].includes(f.id)) { delete S.F[f.id]; S.touched.delete(f.id); }
+  for (const f of Object.values(FIELDS)) if (['polygon', 'polyline', 'polygonList', 'polylineList', 'point', 'objectList'].includes(f.type) || f.source === 'survey' || ['zoning.district', 'zoning.overlays', 'zoning.entitlementPath', 'siteConditions.demolitionRequired', 'app.placePond', 'app.pondArea', 'access.bikeParkingSpaces'].includes(f.id)) { delete S.F[f.id]; S.touched.delete(f.id); }
   S.objs = kept; S.sel = null; S.adding = null; S.scen = []; S.layout = null; S.place = []; S.P.empty = !keepBuildings || true; S.P.siteKey = null;
   renderAllSections(); renderObjList(); renderObjEditor(); renderReqBreak(); renderPlacements(); renderResults(); renderParcelFacts(); renderLegend(); draw(); save();
 }

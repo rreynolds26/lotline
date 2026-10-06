@@ -285,13 +285,13 @@ textarea.json { min-height: 160px; font-size: 11px; }
 
 @media (max-width: 1180px) {
   .app { grid-template-columns: 320px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; height: auto; min-height: 100%; }
-  .stage { min-height: 640px; }
+  .stage { height: min(80vh, 820px); min-height: 480px; align-self: start; position: sticky; top: 8px; }
   .panel.right { grid-column: 1 / -1; overflow: visible; }
   .panel.left { overflow: visible; }
 }
 @media (max-width: 760px) {
   .app { grid-template-columns: minmax(0, 1fr); padding-inline: 16px; }
-  .stage { min-height: 0; height: 62vh; grid-row: 2; }
+  .stage { min-height: 0; height: 62vh; grid-row: 2; position: relative; top: auto; }
   .panel.right { grid-row: 3; }
   .panel.left { grid-row: 4; }
   .legend { display: none; }
