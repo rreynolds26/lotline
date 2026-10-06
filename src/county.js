@@ -316,7 +316,7 @@ async function loadCountyParcel(p) {
     if (bp.length) { set('siteConditions.existingStructures', bp, 'County building footprints'); find('Site', `${bp.length} existing building${bp.length > 1 ? 's' : ''} (${fmt(bp.reduce((s, b) => s + Math.abs(area(b)), 0))} sf of footprint). Turn on “Demolition required” to clear them.`, 'info'); }
     if (imp[0]) {
       const pct = +imp[0].attributes.PercentImperv; const frac = pct > 1 ? pct / 100 : pct;
-      if (isFinite(frac)) { const c = frac * num('stormwater.runoffCoefficientImpervious', 0.95) + (1 - frac) * num('stormwater.runoffCoefficientPervious', 0.25); set('stormwater.runoffCoefficientPre', +c.toFixed(2), `${fmt(frac * 100)}% existing impervious`); find('Site', `Existing impervious cover: ${fmt(frac * 100)}% (${fmt(imp[0].attributes.ImpervAcres, 2)} ac).`); }
+      if (isFinite(frac)) { const c = frac * num('stormwater.runoffCoefficientImpervious', 0.95) + (1 - frac) * num('stormwater.runoffCoefficientPervious', 0.25); set('stormwater.runoffCoefficientPre', +c.toFixed(2), `${fmt(frac * 100)}% existing impervious`); const ia = +imp[0].attributes.ImpervAcres; find('Site', `Existing impervious cover: ${fmt(frac * 100)}%${ia > 0 ? ` (${fmt(ia, 2)} ac)` : ` (about ${fmt(frac * Math.abs(area(S.parcel)) / 43560, 2)} ac)`}.`); }
     }
     if (ws[0]) find('Environment', `Watershed: ${esc(ws[0].attributes.NAME)}.`);
   }));
@@ -416,8 +416,17 @@ async function countySearch(q) {
       const fs = await arcQuery(`${ACC}/ACC_Parcels/FeatureServer/0`, { where: `PARCEL_NO LIKE '${pn.replace(/\s+/g, ' ')}%' OR PARCEL_NO LIKE '${spaced}%'`, fields: 'OBJECTID,PARCEL_NO,PAR_ADD,ACRES,OWNER_NAME' });
       if (fs[0]) parcel = { a: fs[0].attributes, g: fs[0].geometry };
     }
+    // Street part only: city, state and ZIP lower the county geocoder's match score.
+    const street = q.split(',')[0].replace(/\b(athens|winterville|bogart)\b\s*(ga|georgia)?\s*(\d{5}(-\d{4})?)?\s*$/i, '').replace(/\s+/g, ' ').trim();
+    if (!pt && !parcel && /^\d/.test(street)) {
+      // 1. the county address-point layer links addresses straight to parcel numbers
+      const ap = await arcQuery(`${ACC}/ACC_Address_Point/FeatureServer/0`, { where: `UPPER(FullAdd) = '${street.toUpperCase().replace(/'/g, "''")}'`, fields: 'FullAdd,ParcelID', geometry: false }).catch(() => []);
+      const pid = ap[0] && ap[0].attributes.ParcelID;
+      if (pid) { const fs = await arcQuery(`${ACC}/ACC_Parcels/FeatureServer/0`, { where: `PARCEL_NO = '${pid.replace(/'/g, "''")}'`, fields: 'OBJECTID,PARCEL_NO,PAR_ADD,ACRES,OWNER_NAME' }); if (fs[0]) parcel = { a: fs[0].attributes, g: fs[0].geometry }; }
+    }
     if (!pt && !parcel) {
-      const j = await getJSON(`${ACC}/Geocoder/CityworksLocator/GeocodeServer/findAddressCandidates?SingleLine=${encodeURIComponent(q)}&outSR=4326&maxLocations=1&f=json`).catch(() => null);
+      // 2. the county geocoder handles spelled-out or partial addresses
+      const j = await getJSON(`${ACC}/Geocoder/CityworksLocator/GeocodeServer/findAddressCandidates?SingleLine=${encodeURIComponent(street || q)}&outSR=4326&maxLocations=1&f=json`).catch(() => null);
       const c = j && j.candidates && j.candidates[0];
       if (c && c.score >= 80) pt = c.location;
     }
@@ -469,3 +478,11 @@ cv.addEventListener('pointermove', (e) => {
   if (p !== CTX.hover) { CTX.hover = p; cv.title = p ? `${(p.a.PAR_ADD || '').trim()} · ${p.a.PARCEL_NO} · ${fmt(p.a.ACRES, 2)} ac` : ''; draw(); }
 });
 if (EMBEDDED) { $('#countyBox').querySelector('.note').innerHTML = '<b>Live Athens-Clarke parcels</b> load in the hosted version of Lotline. Claude\'s viewer blocks outside connections.'; }
+
+/* Clear the previous parcel's county data when a search lands somewhere the county layers don't cover. */
+function resetCountyContext() {
+  CTX.report = null; CTX.selected = null; CTX.water = []; CTX.sewer = []; CTX.hydrants = []; CTX.manholes = []; CTX.roads = []; CTX.intersections = [];
+  for (const id of GEO_FIELDS) { delete S.F[id]; S.touched.delete(id); }
+  for (const id of ['zoning.district', 'zoning.overlays', 'siteConditions.floodZone', 'siteConditions.baseFloodElevation', 'siteConditions.elevationHigh', 'siteConditions.elevationLow', 'siteConditions.averageSlope', 'siteConditions.slopeDirection']) { delete S.F[id]; S.touched.delete(id); }
+  renderSiteData();
+}

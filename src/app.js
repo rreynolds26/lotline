@@ -969,10 +969,12 @@ async function locate(q) {
     btn.disabled = false;
   }
   if (!(Math.abs(lat) <= 85 && Math.abs(lng) <= 180)) { err.textContent = 'Those coordinates are out of range.'; err.hidden = false; return; }
-  const c = centroid(S.parcel); shiftAll(-c[0], -c[1]);
+  // A general map search has no parcel data: start from a placeholder lot at the spot instead of carrying the old parcel over.
+  if (typeof resetCountyContext === 'function') resetCountyContext();
   S.geo = { lat, lng }; S.P.showMap = true; $('#showMap').checked = true; mapState = 'idle';
-  S.place = []; renderPlacements(); renderParcelFacts(); fillCoordText(); fit(); scheduleSolve(60);
-  $('#hint').innerHTML = '<b>Found it.</b> Drag the parcel corners onto the property lines, or press <b>D</b> to trace a new parcel.';
+  S.parcel = [[-100, -100], [100, -100], [100, 100], [-100, 100]];
+  S.place = []; renderPlacements(); afterParcelChange(true, true);
+  $('#hint').innerHTML = '<b>No county parcel found, so this is a 200 ft placeholder lot.</b> Drag its corners onto the property lines, or press <b>D</b> to trace the real parcel.';
 }
 
 /* ================= canvas ================= */
