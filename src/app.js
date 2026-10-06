@@ -368,7 +368,7 @@ function reqRaw(o) {
 }
 function required() {
   const raw = buildings().reduce((s, o) => s + reqRaw(o), 0);
-  return Math.ceil(raw * (1 - num('parking.sharedParkingReduction') / 100) - 1e-9);
+  return Math.max(0, Math.ceil(raw * (1 - num('parking.sharedParkingReduction') / 100) - 1e-9));
 }
 const garageTotal = () => garages().reduce((s, o) => s + garageStalls(o), 0);
 const totalGFA = () => buildings().reduce((s, o) => s + gfaOf(o), 0);
