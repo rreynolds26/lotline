@@ -594,7 +594,9 @@ function syncAutoObjects(reposition = false) {
 
 /* ================= search ================= */
 let gen = 0, solveTimer = 0;
-const tick = () => new Promise(r => setTimeout(r, 0));
+// Yield via MessageChannel: unlike setTimeout it is not throttled when the tab is in the background.
+const tickCh = new MessageChannel(), tickQ = []; tickCh.port1.onmessage = () => { const r = tickQ.shift(); if (r) r(); };
+const tick = () => new Promise(r => { tickQ.push(r); tickCh.port2.postMessage(0); });
 function setStatus(t, frac) { $('#statusText').textContent = t; $('#statusBar').style.width = frac == null ? '0' : (frac * 100).toFixed(0) + '%'; }
 function scheduleSolve(delay = 200) { S.solving = true; clearTimeout(solveTimer); solveTimer = setTimeout(runSearch, delay); save(); }
 /* How many stalls to draw when laying out only what's required: the requirement less garage stalls,
