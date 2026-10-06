@@ -1646,7 +1646,7 @@ function fieldHTML(f, v, ctx) {
   const desc = f.description ? `<p class="fdesc">${esc(f.description)}</p>` : '';
   const data = `data-fid="${fid}" data-ctx="${ctx}"`;
   const search = esc((f.label + ' ' + f.id + ' ' + (f.description || '')).toLowerCase());
-  if (f.type === 'boolean') return `<label class="fld bool" data-search="${search}" title="${esc(f.description || '')}"><input type="checkbox" id="${id}" ${data} ${v ? 'checked' : ''}><span class="lbl">${esc(f.label)}${appTag}</span>${srcTag}</label>`;
+  if (f.type === 'boolean') return `<label class="fld bool" data-fwrap="${fid}" data-wctx="${ctx}" data-search="${search}" title="${esc(f.description || '')}"><input type="checkbox" id="${id}" ${data} ${v ? 'checked' : ''}><span class="lbl">${esc(f.label)}${appTag}</span>${srcTag}</label>`;
   let ctl = '', wide = false;
   switch (f.type) {
     case 'number': case 'integer': {

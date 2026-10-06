@@ -197,12 +197,26 @@ async function loadCountyParcel(p) {
   ];
   jobs.push(safe('Overlays', async () => {
     const overlays = new Set(F('zoning.overlays') || []);
+    // One "identify" request covers every overlay layer; the downtown design layer keeps its own query because
+    // identify returns only its short code. If identify fails, fall back to one query per layer.
+    const missed = [];
+    const clean = (a) => Object.fromEntries(Object.entries(a).map(([k, v]) => [k, v === 'Null' || (typeof v === 'string' && !v.trim()) ? null : v]));
+    const g = inset(P, 3) || P;
+    let byLayer = null;
+    try {
+      const ids = OVERLAY_LAYERS.map(l => l[0]).filter(id => id !== 49);
+      const bbP = bbox(g), sw = w2ll([bbP.x0 - 200, bbP.y0 - 200]), ne = w2ll([bbP.x1 + 200, bbP.y1 + 200]);
+      const body = new URLSearchParams({ f: 'json', geometry: JSON.stringify({ rings: [g.map(w2ll).concat([w2ll(g[0])])], spatialReference: { wkid: 4326 } }), geometryType: 'esriGeometryPolygon', sr: '4326', layers: 'all:' + ids.join(','), tolerance: '0', mapExtent: [sw[0], sw[1], ne[0], ne[1]].join(','), imageDisplay: '800,600,96', returnGeometry: 'false' });
+      const j = await getJSON(`${CL}/identify`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() });
+      byLayer = {}; for (const r of j.results || []) (byLayer[r.layerId] ||= []).push({ attributes: clean(r.attributes) });
+    } catch (e) { byLayer = null; }
     await Promise.all(OVERLAY_LAYERS.map(async ([id, ov, txt, lvl]) => {
-      const fs = await arcQuery(`${CL}/${id}`, { geom: inset(P, 3) || P, geometry: false }).catch(() => []);
+      const fs = byLayer && id !== 49 ? (byLayer[id] || []) : await arcQuery(`${CL}/${id}`, { geom: g, geometry: false }).catch(() => { missed.push(id); return []; });
       const seen = new Set();
       for (const f of fs) { const t = txt(f.attributes); if (seen.has(t)) continue; seen.add(t); find(id === 55 || id === 71 || id === 69 ? 'Planning' : 'Zoning', esc(t), lvl === 'error' ? 'error' : lvl); if (ov && ov !== 'Moratorium') { overlays.add(ov); if (ov === 'downtown') overlays.add('design_review'); } }
     }));
     set('zoning.overlays', [...overlays], 'County overlay layers');
+    if (missed.length) find('Data gaps', `${missed.length} county overlay layer${missed.length > 1 ? 's' : ''} did not answer, so an overlay could be missing. Search this parcel again to retry.`, 'warn');
   }));
   // neighbors → adjacent land uses
   jobs.push(safe('Neighboring parcels', async () => {
@@ -226,14 +240,18 @@ async function loadCountyParcel(p) {
   }));
   // roads, frontage, intersections, ROW expansion
   jobs.push(safe('Roads', async () => {
-    const [rs, widths, lanes, ints, roww, walks] = await Promise.all([
+    const [rs, ints, roww, walks] = await Promise.all([
       arcQuery(`${CL}/70`, { geom: env, fields: 'ROAD_NAME,CLASSIFICA,E911Class,SEGMENTID' }),
-      arcQuery(`${ACC}/TPWStreetWidth/FeatureServer/0`, { geom: env, fields: 'SEGMENTID,STREETWIDTH', geometry: false }).catch(() => []),
-      arcQuery(`${ACC}/TPWStreetNumberOfLanes/FeatureServer/0`, { geom: env, fields: 'SEGMENTID,NUMLANES', geometry: false }).catch(() => []),
       arcQuery(`${ACC}/TPW_Streets/FeatureServer/0`, { geom: env, fields: 'STREETS' }).catch(() => []),
       arcQuery(`${CL}/61`, { geom: inset(P, -80) || P, geometry: false }).catch(() => []),
       arcQuery(`${CL}/13`, { geom: inset(P, -60) || P, fields: 'TYPE,SingleBoth' }).catch(() => []),
     ]);
+    // Width and lane counts by segment ID: an area search on these layers is slow enough to time out.
+    const segIds = [...new Set(rs.map(f => f.attributes.SEGMENTID).filter(Boolean))].slice(0, 60).map(x => `'${String(x).replace(/'/g, "''")}'`).join(',');
+    const [widths, lanes] = segIds ? await Promise.all([
+      arcQuery(`${ACC}/TPWStreetWidth/FeatureServer/0`, { where: `SEGMENTID IN (${segIds})`, fields: 'SEGMENTID,STREETWIDTH', geometry: false }).catch(() => []),
+      arcQuery(`${ACC}/TPWStreetNumberOfLanes/FeatureServer/0`, { where: `SEGMENTID IN (${segIds})`, fields: 'SEGMENTID,NUMLANES', geometry: false }).catch(() => []),
+    ]) : [[], []];
     const wmap = new Map(widths.map(f => [f.attributes.SEGMENTID, f.attributes.STREETWIDTH])), lmap = new Map(lanes.map(f => [f.attributes.SEGMENTID, f.attributes.NUMLANES]));
     CTX.roads = rs.flatMap(f => pathsOf(f.geometry).flatMap(l => clipLine(l, box)).map(pts => ({ pts, name: (f.attributes.ROAD_NAME || '').trim(), cls: ROAD_CLASS(f.attributes.CLASSIFICA || f.attributes.E911Class), width: +wmap.get(f.attributes.SEGMENTID) || null, lanes: +lmap.get(f.attributes.SEGMENTID) || null })));
     CTX.intersections = ints.map(f => ({ pt: ptOf(f.geometry), name: f.attributes.STREETS })).filter(i => i.pt);
@@ -354,7 +372,7 @@ async function loadCountyParcel(p) {
   }));
   jobs.push(safe('Elevation', async () => {
     R.sources.add('USGS 3DEP elevation');
-    const N = 18, pts = [];
+    const N = 14, pts = [];
     for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) pts.push([bb0.x0 - 30 + (bb0.x1 - bb0.x0 + 60) * i / (N - 1), bb0.y0 - 30 + (bb0.y1 - bb0.y0 + 60) * j / (N - 1)]);
     const geom = { points: pts.map(w2ll).map(q => [+q[0].toFixed(7), +q[1].toFixed(7)]), spatialReference: { wkid: 4326 } };
     const body = new URLSearchParams({ f: 'json', geometryType: 'esriGeometryMultipoint', returnFirstValueOnly: 'true', geometry: JSON.stringify(geom) });
