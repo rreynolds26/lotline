@@ -1,0 +1,505 @@
+<meta charset="utf-8">
+<title>Lotline Parking Planner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: a drafting table in three panes — schema-driven site inputs | live site plan | yield, checks, metrics, cost. Parking-paint yellow is the one accent. */
+:root {
+  --bg: #e7ebe8;
+  --panel: #f7f8f6;
+  --raised: #ffffff;
+  --ink: #17212a;
+  --muted: #5a6870;
+  --line: #d2d9d5;
+  --accent: #f2c230;
+  --accent-ink: #7d5900;
+  --focus: #1d6fa3;
+  --ok: #2c7a49;
+  --ok-bg: #e2f1e6;
+  --bad: #b23f2a;
+  --bad-bg: #f8e4df;
+  --warn: #9a6400;
+  --warn-bg: #fbf0d6;
+  --info: #2a5f8a;
+  --info-bg: #e2edf6;
+
+  --c-bg: #dde3df;
+  --c-site: #f1f3ee;
+  --c-setback: rgba(178, 63, 42, 0.30);
+  --c-asphalt: #4a525a;
+  --c-compact: #5d666e;
+  --c-stripe: #f6f3e8;
+  --c-paint: #f2c230;
+  --c-bldg: #24313b;
+  --c-bldgink: #f2f4f1;
+  --c-garage: #6d7f8c;
+  --c-buffer: #c7cfca;
+  --c-ada: #2f63c4;
+  --c-ev: #2f9a5d;
+  --c-island: #7ba66d;
+  --c-edge: #b23f2a;
+  --c-env: #7a4fa0;
+  --c-dim: #34424b;
+  --c-gridm: rgba(23, 33, 42, 0.05);
+  --c-gridM: rgba(23, 33, 42, 0.11);
+  --c-draw: #1d6fa3;
+  --c-water: #4b8fc9;
+  --c-flood: rgba(75, 143, 201, 0.20);
+  --c-wet: #3f8f7c;
+  --c-ease: #8a55b8;
+  --c-tree: #4f7a45;
+  --c-lod: #d07a1f;
+  --c-contour: #a27a48;
+  --c-pond: #7fb3dc;
+  --c-dump: #8b8478;
+  --c-load: #6a6f75;
+
+  --f-display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --r: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1417; --panel: #161d22; --raised: #1c252b; --ink: #e3e9ea; --muted: #95a3aa; --line: #283339;
+    --accent: #f2c230; --accent-ink: #f2c230; --focus: #6bb6e6;
+    --ok: #6fcf8f; --ok-bg: #173022; --bad: #f0866f; --bad-bg: #3a1e18; --warn: #f0c060; --warn-bg: #33290f; --info: #8cc2ee; --info-bg: #152838;
+    --c-bg: #0c1013; --c-site: #182025; --c-setback: rgba(240, 134, 111, 0.28); --c-asphalt: #3b444b; --c-compact: #4b555d; --c-stripe: #eceadf;
+    --c-paint: #f2c230; --c-bldg: #c9d3d8; --c-bldgink: #12181c; --c-garage: #7d93a3; --c-buffer: #2c363c; --c-ada: #4f86e8; --c-ev: #4cc283; --c-island: #4f7a45;
+    --c-edge: #f0866f; --c-env: #b892e0; --c-dim: #b4c0c6; --c-gridm: rgba(227, 233, 234, 0.04); --c-gridM: rgba(227, 233, 234, 0.09); --c-draw: #6bb6e6;
+    --c-water: #6aa9e0; --c-flood: rgba(106, 169, 224, 0.18); --c-wet: #5fb39e; --c-ease: #b892e0; --c-tree: #6fa564; --c-lod: #eb9a45; --c-contour: #c49a66;
+    --c-pond: #3d6f99; --c-dump: #8b8478; --c-load: #59606a;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1417; --panel: #161d22; --raised: #1c252b; --ink: #e3e9ea; --muted: #95a3aa; --line: #283339;
+  --accent: #f2c230; --accent-ink: #f2c230; --focus: #6bb6e6;
+  --ok: #6fcf8f; --ok-bg: #173022; --bad: #f0866f; --bad-bg: #3a1e18; --warn: #f0c060; --warn-bg: #33290f; --info: #8cc2ee; --info-bg: #152838;
+  --c-bg: #0c1013; --c-site: #182025; --c-setback: rgba(240, 134, 111, 0.28); --c-asphalt: #3b444b; --c-compact: #4b555d; --c-stripe: #eceadf;
+  --c-paint: #f2c230; --c-bldg: #c9d3d8; --c-bldgink: #12181c; --c-garage: #7d93a3; --c-buffer: #2c363c; --c-ada: #4f86e8; --c-ev: #4cc283; --c-island: #4f7a45;
+  --c-edge: #f0866f; --c-env: #b892e0; --c-dim: #b4c0c6; --c-gridm: rgba(227, 233, 234, 0.04); --c-gridM: rgba(227, 233, 234, 0.09); --c-draw: #6bb6e6;
+  --c-water: #6aa9e0; --c-flood: rgba(106, 169, 224, 0.18); --c-wet: #5fb39e; --c-ease: #b892e0; --c-tree: #6fa564; --c-lod: #eb9a45; --c-contour: #c49a66;
+  --c-pond: #3d6f99; --c-dump: #8b8478; --c-load: #59606a;
+  color-scheme: dark;
+}
+
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 13.5px; line-height: 1.45; }
+* { box-sizing: border-box; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button:disabled { opacity: .55; cursor: progress; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+code { font-family: var(--f-mono); font-size: 11.5px; }
+
+.app { height: 100%; display: grid; grid-template-columns: 340px minmax(0, 1fr) 340px; grid-template-rows: auto minmax(0, 1fr); gap: 10px; padding: 10px 16px 12px; }
+.top { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.brand { display: flex; align-items: center; gap: 10px; }
+.mark { display: flex; gap: 4px; align-items: stretch; height: 26px; padding: 0 3px; background: var(--c-asphalt); border-radius: 3px; }
+.mark i { width: 3px; background: var(--accent); margin: 3px 0; }
+.mark i:nth-child(2) { margin-left: 9px; }
+.brand h1 { margin: 0; font-family: var(--f-display); font-weight: 700; font-size: 25px; letter-spacing: 0.06em; text-transform: uppercase; line-height: 1; }
+.brand span { font-family: var(--f-display); font-size: 15px; color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; }
+.top .status { margin-left: auto; font-family: var(--f-mono); font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.top .status .bar { width: 90px; height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.top .status .bar b { display: block; height: 100%; width: 0; background: var(--accent); transition: width .15s; }
+.top .proj { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); overflow: auto; min-width: 0; min-height: 0; }
+.search { position: sticky; top: 0; z-index: 3; padding: 10px 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.sec { border-bottom: 1px solid var(--line); }
+.sec:last-child { border-bottom: 0; }
+.sec > summary, .sec > h2 { list-style: none; cursor: pointer; margin: 0; padding: 11px 14px; font-family: var(--f-display); font-weight: 600; font-size: 15px; letter-spacing: 0.08em; text-transform: uppercase; display: flex; align-items: center; gap: 8px; }
+.sec > h2 { cursor: default; }
+.sec > summary::-webkit-details-marker { display: none; }
+.sec > summary::after { content: ""; margin-left: 4px; width: 7px; height: 7px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(-45deg); transition: transform .15s; flex: none; }
+.sec[open] > summary::after { transform: rotate(45deg); }
+.sec .cnt { margin-left: auto; font-family: var(--f-mono); font-size: 10.5px; letter-spacing: 0; text-transform: none; font-weight: 500; color: var(--warn); background: var(--warn-bg); padding: 1px 6px; border-radius: 99px; }
+.sec .cnt:empty { display: none; }
+.sec .body { padding: 0 14px 14px; display: grid; gap: 10px; }
+.stack { display: grid; gap: 10px; }
+.sec .num { font-family: var(--f-mono); font-size: 11px; color: var(--accent-ink); font-weight: 500; letter-spacing: 0; }
+.sub { font-family: var(--f-display); font-weight: 600; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 4px 0 -4px; }
+
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.rowx { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: end; }
+label.f { display: grid; gap: 3px; min-width: 0; }
+label.f > span { font-size: 11.5px; color: var(--muted); }
+input[type="number"], input[type="text"], input[type="search"], select, textarea { width: 100%; min-width: 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--raised); font-family: var(--f-mono); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+input[readonly] { background: transparent; border-style: dashed; }
+input[aria-invalid="true"] { border-color: var(--bad); }
+select, input[type="text"].plain, input[type="search"] { font-family: var(--f-body); font-size: 12.5px; }
+textarea { resize: vertical; min-height: 92px; line-height: 1.5; }
+.unit { position: relative; }
+.unit input { padding-right: 46px; }
+.unit em { position: absolute; right: 7px; top: 50%; transform: translateY(-50%); font-style: normal; font-size: 10.5px; color: var(--muted); font-family: var(--f-mono); pointer-events: none; max-width: 40px; overflow: hidden; white-space: nowrap; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; cursor: pointer; }
+.check input { accent-color: var(--c-asphalt); width: 15px; height: 15px; margin: 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.chips label { display: flex; align-items: center; gap: 5px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 99px; background: var(--raised); font-size: 11.5px; cursor: pointer; }
+.chips input { accent-color: var(--c-asphalt); margin: 0; }
+.note { font-size: 11.5px; color: var(--muted); margin: 0; }
+.err { font-size: 12px; color: var(--bad); margin: 0; }
+
+/* schema fields */
+.fgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px 8px; }
+.fld { display: grid; gap: 3px; min-width: 0; align-content: start; }
+.fld.wide { grid-column: 1 / -1; }
+.fld > label, .fld > .lblrow { display: flex; gap: 5px; align-items: baseline; font-size: 11.5px; color: var(--muted); line-height: 1.3; }
+.fld .lbl { flex: 1; min-width: 0; }
+.fld.need > label .lbl::after, .fld.need > .lblrow .lbl::after { content: " · needed"; color: var(--warn); }
+.fld.bool { display: flex; align-items: center; gap: 7px; font-size: 12px; cursor: pointer; grid-column: 1 / -1; }
+.fld.bool input { accent-color: var(--c-asphalt); width: 15px; height: 15px; margin: 0; flex: none; }
+.fld { position: relative; }
+.fld .fdesc { display: none; position: absolute; z-index: 4; left: 0; right: 0; top: 100%; margin: 3px 0 0; padding: 6px 8px; font-size: 11px; color: var(--ink); background: var(--raised); border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,.12); pointer-events: none; }
+.fld:has(input:focus, select:focus) .fdesc { display: block; }
+.src { flex: none; font-family: var(--f-mono); font-size: 9.5px; font-weight: 500; padding: 0 4px; border-radius: 3px; border: 1px solid var(--line); color: var(--muted); line-height: 14px; cursor: help; }
+.src.s-local_code { color: var(--bad); border-color: currentColor; }
+.src.s-agency { color: var(--info); border-color: currentColor; }
+.src.s-standard { color: var(--ok); border-color: currentColor; }
+.src.s-survey { color: var(--warn); border-color: currentColor; }
+.app-tag { font-style: normal; font-size: 9.5px; color: var(--accent-ink); font-family: var(--f-mono); }
+.geo { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
+.geo .st { flex: 1; min-width: 0; font-family: var(--f-mono); font-size: 11.5px; color: var(--muted); }
+.items { display: grid; gap: 5px; }
+.item { display: grid; grid-template-columns: 18px minmax(0, 1fr) 20px; gap: 6px; align-items: start; padding: 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--raised); }
+.item > b { font-family: var(--f-mono); font-size: 11px; color: var(--muted); padding-top: 4px; }
+.item .ig { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.item .ig label { display: grid; gap: 1px; font-size: 10.5px; color: var(--muted); min-width: 0; }
+.item .ig label.bool { display: flex; align-items: center; gap: 5px; font-size: 11px; }
+.item .ig input, .item .ig select { padding: 4px 6px; font-size: 11.5px; }
+.x { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 2px 0; }
+.x:hover { color: var(--bad); }
+
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 11px; border-radius: 4px; border: 1px solid var(--line); background: var(--raised); cursor: pointer; font-size: 12.5px; font-weight: 500; white-space: nowrap; }
+.btn.sm { padding: 4px 8px; font-size: 11.5px; }
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--c-asphalt); color: #fff; border-color: var(--c-asphalt); }
+.btn.primary:hover { filter: brightness(1.12); }
+.btn.on { background: var(--accent); color: #1b1600; border-color: var(--accent); }
+.btn.ghost { border-color: transparent; background: transparent; color: var(--bad); padding-inline: 6px; }
+.btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.tabs { display: flex; gap: 2px; padding: 2px; background: var(--bg); border-radius: 5px; }
+.tabs button { flex: 1; border: 0; background: transparent; padding: 5px 2px; border-radius: 4px; cursor: pointer; font-size: 12px; color: var(--muted); }
+.tabs button[aria-selected="true"] { background: var(--raised); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+.tabs button .badge { font-family: var(--f-mono); font-size: 10px; color: var(--bad); }
+.kv { display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; }
+.kv b { font-family: var(--f-mono); font-weight: 500; font-variant-numeric: tabular-nums; text-align: right; }
+
+/* site objects */
+.objlist { display: grid; gap: 4px; }
+.obj { display: grid; grid-template-columns: 12px 1fr auto; gap: 8px; align-items: center; text-align: left; padding: 6px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--raised); cursor: pointer; width: 100%; font-size: 12.5px; }
+.obj i { width: 12px; height: 12px; border-radius: 2px; background: var(--c-bldg); }
+.obj.garage i { background: var(--c-garage); }
+.obj.pond i { background: var(--c-pond); }
+.obj.dumpster i { background: var(--c-dump); }
+.obj.loading i { background: var(--c-load); }
+.obj b { font-family: var(--f-mono); font-weight: 500; font-size: 11.5px; color: var(--muted); }
+.obj[aria-pressed="true"] { border-color: var(--c-asphalt); box-shadow: inset 3px 0 0 var(--accent); }
+.editor { border: 1px solid var(--line); border-radius: 5px; padding: 10px; display: grid; gap: 9px; background: var(--bg); }
+
+/* uses table */
+.uses { display: grid; gap: 4px; }
+.use { display: grid; grid-template-columns: minmax(0, 1fr) 92px 50px 50px 16px; gap: 4px; align-items: center; }
+.use input, .use select { padding: 4px 5px; font-size: 11.5px; }
+.usehead { font-size: 10.5px; color: var(--muted); }
+.breakdown { display: grid; gap: 3px; padding: 8px 10px; background: var(--bg); border-radius: 5px; }
+
+/* stage */
+.stage { position: relative; background: var(--c-bg); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; min-width: 0; min-height: 0; }
+#cv { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; display: block; }
+.toolbar { position: absolute; top: 10px; left: 10px; display: flex; gap: 4px; flex-wrap: wrap; z-index: 2; max-width: calc(100% - 20px); }
+.toolbar .grp { display: flex; background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 2px; gap: 2px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.toolbar button { border: 0; background: transparent; padding: 5px 9px; border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: 500; display: flex; align-items: center; gap: 5px; }
+.toolbar button:hover { background: var(--bg); }
+.toolbar button.on { background: var(--accent); color: #1b1600; }
+.toolbar kbd { font-family: var(--f-mono); font-size: 10px; color: var(--muted); }
+.toolbar button.on kbd { color: #5a4600; }
+.hint { position: absolute; left: 10px; bottom: 10px; z-index: 2; background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 6px 10px; font-size: 12px; max-width: min(600px, calc(100% - 150px)); color: var(--muted); }
+.hint b { color: var(--ink); font-weight: 600; }
+.legend { position: absolute; right: 10px; top: 10px; z-index: 2; background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 7px 10px; display: grid; gap: 3px; font-size: 11px; max-height: calc(100% - 140px); overflow: auto; }
+.legend div { display: flex; align-items: center; gap: 7px; }
+.legend i { width: 14px; height: 10px; border-radius: 2px; display: inline-block; flex: none; }
+
+/* results */
+.yield { padding: 14px; display: grid; gap: 12px; border-bottom: 1px solid var(--line); }
+.big { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.big > div { display: grid; gap: 0; }
+.big small { font-family: var(--f-display); font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.big strong { font-family: var(--f-display); font-weight: 700; font-size: 46px; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: 0.01em; }
+.verdict { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 4px; font-weight: 600; font-size: 13px; }
+.verdict.ok { background: var(--ok-bg); color: var(--ok); }
+.verdict.bad { background: var(--bad-bg); color: var(--bad); }
+.verdict .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: none; }
+.meter { position: relative; height: 10px; background: var(--bg); border-radius: 2px; overflow: hidden; }
+.meter b { position: absolute; inset: 0 auto 0 0; background: var(--c-asphalt); }
+.meter s { position: absolute; top: 0; bottom: 0; background: var(--c-garage); text-decoration: none; }
+.meter i { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--accent); }
+.meterlbl { display: flex; justify-content: space-between; font-family: var(--f-mono); font-size: 10.5px; color: var(--muted); margin-top: -6px; }
+.facts { display: grid; gap: 5px; }
+.rtabs { position: sticky; top: 0; z-index: 2; background: var(--panel); padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.pane { padding: 12px 14px 16px; display: grid; gap: 10px; }
+
+.scen { display: grid; gap: 6px; }
+.card { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 10px; align-items: center; text-align: left; padding: 8px 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--raised); cursor: pointer; width: 100%; }
+.card:hover { border-color: var(--muted); }
+.card[aria-pressed="true"] { border-color: var(--c-asphalt); box-shadow: inset 3px 0 0 var(--accent); }
+.card .rk { grid-row: span 2; font-family: var(--f-display); font-weight: 700; font-size: 15px; color: var(--muted); width: 18px; }
+.card .t { font-weight: 600; font-size: 12.5px; }
+.card .s { font-size: 11.5px; color: var(--muted); grid-column: 2; }
+.card .n { grid-row: span 2; text-align: right; font-family: var(--f-display); font-weight: 700; font-size: 24px; line-height: 1; font-variant-numeric: tabular-nums; }
+.card .n em { display: block; font-style: normal; font-family: var(--f-mono); font-weight: 500; font-size: 10.5px; }
+.card .n em.ok { color: var(--ok); }
+.card .n em.bad { color: var(--bad); }
+
+.chk { display: grid; grid-template-columns: 10px 1fr; gap: 2px 9px; padding: 7px 9px; border-radius: 5px; background: var(--raised); border: 1px solid var(--line); }
+.chk i { width: 9px; height: 9px; border-radius: 50%; margin-top: 4px; grid-row: span 2; }
+.chk .t { font-size: 12.5px; font-weight: 600; }
+.chk .d { font-size: 11.5px; color: var(--muted); }
+.chk.fail i { background: var(--bad); } .chk.fail { border-color: color-mix(in srgb, var(--bad) 40%, var(--line)); }
+.chk.warn i { background: var(--warn); }
+.chk.info i { background: var(--info); }
+.chk.pass i { background: var(--ok); }
+.chk.need i, .chk.manual i { background: transparent; border: 1.5px solid var(--muted); }
+.chkgrp { display: grid; gap: 5px; }
+.summ { display: flex; gap: 6px; flex-wrap: wrap; }
+.pill { font-family: var(--f-mono); font-size: 11px; padding: 2px 8px; border-radius: 99px; }
+.pill.fail { background: var(--bad-bg); color: var(--bad); }
+.pill.warn { background: var(--warn-bg); color: var(--warn); }
+.pill.pass { background: var(--ok-bg); color: var(--ok); }
+.pill.need { background: var(--bg); color: var(--muted); }
+.mgrp { display: grid; gap: 4px; }
+.mgrp h3 { margin: 6px 0 2px; font-family: var(--f-display); font-weight: 600; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.kv.tot { border-top: 1px solid var(--line); padding-top: 5px; font-weight: 600; }
+details.more summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+details.more ul { margin: 6px 0 0; padding-left: 18px; font-size: 11.5px; color: var(--muted); columns: 2; column-gap: 16px; }
+textarea.json { min-height: 160px; font-size: 11px; }
+
+@media (max-width: 1180px) {
+  .app { grid-template-columns: 320px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; height: auto; min-height: 100%; }
+  .stage { min-height: 640px; }
+  .panel.right { grid-column: 1 / -1; overflow: visible; }
+  .panel.left { overflow: visible; }
+}
+@media (max-width: 760px) {
+  .app { grid-template-columns: minmax(0, 1fr); padding-inline: 16px; }
+  .stage { min-height: 0; height: 62vh; grid-row: 2; }
+  .panel.right { grid-row: 3; }
+  .panel.left { grid-row: 4; }
+  .legend { display: none; }
+  .toolbar kbd { display: none; }
+  .hint { max-width: calc(100% - 20px); bottom: 44px; }
+  .fgrid { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <div class="mark" aria-hidden="true"><i></i><i></i><i></i></div>
+      <h1>Lotline</h1>
+      <span>Site feasibility planner</span>
+    </div>
+    <div class="proj">
+      <button class="btn sm" id="btnExport">Export project</button>
+      <label class="btn sm" for="importFile">Import project</label>
+      <input type="file" id="importFile" accept=".json,application/json" hidden>
+      <button class="btn sm" id="btnNew">Start over</button>
+    </div>
+    <div class="status" aria-live="polite"><span id="statusText">Ready</span><div class="bar"><b id="statusBar"></b></div></div>
+  </header>
+
+  <!-- ===== Inputs ===== -->
+  <aside class="panel left" id="left" aria-label="Site inputs">
+    <div class="search"><input type="search" id="fieldSearch" placeholder="Search 200+ site inputs, e.g. setback, hydrant" aria-label="Search inputs"></div>
+
+    <details class="sec" open data-sec="parcel">
+      <summary><span class="num">01</span> Parcel &amp; legal <span class="cnt"></span></summary>
+      <div class="body">
+        <div class="stack" data-custom>
+          <label class="f"><span>Start from a sample</span>
+            <select id="sample">
+              <option value="">Choose a sample parcel…</option>
+              <option value="pad">Corner retail pad · 2.4 ac</option>
+              <option value="irregular">Irregular suburban lot · 4.4 ac</option>
+              <option value="narrow">Narrow infill lot · 1.8 ac</option>
+              <option value="ell">L-shaped outparcel · 3.0 ac</option>
+            </select>
+          </label>
+          <div class="tabs" role="tablist" id="parcelTabs">
+            <button role="tab" aria-selected="true" data-tab="draw">Draw</button>
+            <button role="tab" aria-selected="false" data-tab="map">Map</button>
+            <button role="tab" aria-selected="false" data-tab="rect">Size</button>
+            <button role="tab" aria-selected="false" data-tab="coords">Coords</button>
+            <button role="tab" aria-selected="false" data-tab="import">Import</button>
+          </div>
+          <div data-pane="draw" class="stack">
+            <p class="note">Click <b>Draw parcel</b>, then click each corner. Click the first corner or press Enter to close. Drag corners to adjust, double-click an edge to add a corner, select a corner and press Delete to remove it.</p>
+            <div class="btns"><button class="btn primary" id="btnDraw">Draw parcel</button><button class="btn" id="btnFit">Fit to view</button></div>
+            <label class="f"><span>Trace over a site plan or survey image</span><input type="file" id="imgFile" accept="image/*"></label>
+            <div id="imgTools" class="stack" hidden>
+              <div class="btns"><button class="btn" id="btnScale">Set scale</button><button class="btn" id="btnMoveImg">Move image</button><button class="btn" id="btnClearImg">Remove</button></div>
+              <div id="scaleForm" class="row" hidden>
+                <label class="f"><span>Real distance between the 2 points</span><div class="unit"><input type="number" id="scaleDist" min="1" step="1" value="100"><em>ft</em></div></label>
+                <div style="display:flex;align-items:end"><button class="btn primary" id="btnScaleApply" style="width:100%">Apply scale</button></div>
+              </div>
+              <label class="f"><span>Image opacity</span><input type="range" id="imgOpacity" min="0.1" max="1" step="0.05" value="0.6"></label>
+            </div>
+          </div>
+          <div data-pane="map" class="stack" hidden>
+            <p class="note">In Athens-Clarke County, search an address or parcel number to load the real parcel and everything the county, FEMA, USGS and USDA publish about it. Elsewhere, find the spot and trace the parcel over the satellite image.</p>
+            <div class="rowx"><label class="f"><span>Address, parcel number, or latitude, longitude</span><input type="search" id="addr" placeholder="301 College Ave, or 171B1 H002"></label><button class="btn primary" id="btnFind">Find</button></div>
+            <div class="stack" id="countyBox">
+              <p class="note"><b>Athens-Clarke County parcels</b> are live from the county GIS.</p>
+              <div class="btns"><button class="btn" id="btnPick">Pick a parcel on the map</button></div>
+              <label class="check"><input type="checkbox" id="showCounty" checked> Show county parcel lines</label>
+              <p class="note" id="countyNote"></p>
+            </div>
+            <label class="check"><input type="checkbox" id="showMap" checked> Show satellite imagery</label>
+            <label class="f"><span>Imagery strength</span><input type="range" id="mapOpacity" min="0.2" max="1" step="0.05" value="0.9"></label>
+            <p class="note" id="mapNote">Tip: in Google Maps, right-click the property and click the coordinates to copy them, then paste here.</p>
+            <p class="err" id="mapErr" hidden></p>
+          </div>
+          <div data-pane="rect" class="stack" hidden>
+            <p class="note">Builds a rectangle from the gross area and frontage below, with the frontage on the chosen side.</p>
+            <button class="btn primary" id="btnRect">Make parcel from area &amp; frontage</button>
+          </div>
+          <div data-pane="coords" class="stack" hidden>
+            <label class="f"><span>Format</span>
+              <select id="coordFmt">
+                <option value="ft">x, y in feet (one corner per line)</option>
+                <option value="ll">Latitude, longitude (one corner per line)</option>
+                <option value="brg">Bearings &amp; distances (deed calls)</option>
+              </select>
+            </label>
+            <textarea id="coordText" spellcheck="false" aria-label="Parcel coordinates"></textarea>
+            <p class="note" id="coordHelp"></p>
+            <div class="btns"><button class="btn primary" id="btnCoords">Apply coordinates</button></div>
+            <p class="err" id="coordErr" hidden></p>
+          </div>
+          <div data-pane="import" class="stack" hidden>
+            <p class="note">Load a parcel boundary exported from a county GIS viewer, Google Earth, or QGIS. The first polygon is used, and it lands on the satellite map.</p>
+            <label class="f"><span>GeoJSON or KML file</span><input type="file" id="geoFile" accept=".geojson,.json,.kml,application/json,application/vnd.google-earth.kml+xml"></label>
+            <p class="err" id="geoErr" hidden></p>
+          </div>
+          <div class="facts" id="parcelFacts"></div>
+        </div>
+        <div class="fgrid" id="g-parcel"></div>
+      </div>
+    </details>
+
+    <details class="sec" data-sec="zoning">
+      <summary><span class="num">02</span> Zoning envelope <span class="cnt"></span></summary>
+      <div class="body">
+        <div class="stack" data-custom>
+          <label class="f"><span>Jurisdiction profile</span><select id="profile"></select></label>
+          <p class="note">A profile fills in every local-code, agency and national-standard value at once. The built-in profiles are typical starting points, not any city's adopted code.</p>
+          <div class="rowx"><label class="f"><span>Save the current rules as a profile</span><input type="text" class="plain" id="profileName" placeholder="e.g. Plano, TX · C-2"></label><button class="btn" id="btnSaveProfile">Save</button></div>
+          <button class="btn ghost" id="btnDelProfile" hidden>Delete this saved profile</button>
+        </div>
+        <div class="fgrid" id="g-zoning"></div>
+      </div>
+    </details>
+
+    <details class="sec" open data-sec="building">
+      <summary><span class="num">03</span> Buildings &amp; site objects <span class="cnt"></span></summary>
+      <div class="body">
+        <div class="stack" data-custom>
+          <div class="objlist" id="objList"></div>
+          <div class="btns"><button class="btn" id="btnAddB">+ Building</button><button class="btn" id="btnAddG">+ Parking garage</button></div>
+          <div id="objEditor"></div>
+        </div>
+        <div class="fgrid" id="g-building"></div>
+      </div>
+    </details>
+
+    <details class="sec" data-sec="parking">
+      <summary><span class="num">04</span> Parking &amp; loading <span class="cnt"></span></summary>
+      <div class="body">
+        <div class="stack" data-custom>
+          <div class="sub">Parking ratio by use</div>
+          <div class="use usehead" aria-hidden="true"><span>Use</span><span>Basis</span><span>/1k sf</span><span>/unit</span><span></span></div>
+          <div class="uses" id="usesTable"></div>
+          <div class="btns"><button class="btn sm" id="btnAddUse">+ Add use</button></div>
+          <div class="breakdown" id="reqBreak"></div>
+        </div>
+        <div class="fgrid" id="g-parking"></div>
+      </div>
+    </details>
+
+    <details class="sec" data-sec="access"><summary><span class="num">05</span> Access &amp; circulation <span class="cnt"></span></summary><div class="body"><div class="fgrid" id="g-access"></div></div></details>
+    <details class="sec" data-sec="siteConditions"><summary><span class="num">06</span> Site conditions <span class="cnt"></span></summary><div class="body"><div class="fgrid" id="g-siteConditions"></div></div></details>
+    <details class="sec" data-sec="grading"><summary><span class="num">07</span> Grading &amp; earthwork <span class="cnt"></span></summary><div class="body"><div class="fgrid" id="g-grading"></div></div></details>
+    <details class="sec" data-sec="stormwater"><summary><span class="num">08</span> Stormwater <span class="cnt"></span></summary><div class="body"><div class="fgrid" id="g-stormwater"></div></div></details>
+    <details class="sec" data-sec="utilities"><summary><span class="num">09</span> Utilities <span class="cnt"></span></summary><div class="body"><div class="fgrid" id="g-utilities"></div></div></details>
+    <details class="sec" data-sec="fire"><summary><span class="num">10</span> Fire access <span class="cnt"></span></summary><div class="body"><div class="fgrid" id="g-fire"></div></div></details>
+    <details class="sec" data-sec="siteFeatures"><summary><span class="num">11</span> Site features <span class="cnt"></span></summary><div class="body"><div class="fgrid" id="g-siteFeatures"></div></div></details>
+    <details class="sec" data-sec="process"><summary><span class="num">12</span> Process &amp; cost <span class="cnt"></span></summary><div class="body"><div class="fgrid" id="g-process"></div></div></details>
+  </aside>
+
+  <!-- ===== Plan ===== -->
+  <main class="stage" id="stage">
+    <canvas id="cv" aria-label="Site plan showing the parcel, envelopes, buildings and parking layout"></canvas>
+    <div class="toolbar">
+      <div class="grp">
+        <button id="tSelect" class="on" title="Select and drag (V)">Select <kbd>V</kbd></button>
+        <button id="tDraw" title="Draw parcel (D)">Draw parcel <kbd>D</kbd></button>
+      </div>
+      <div class="grp">
+        <button id="tZoomIn" title="Zoom in" aria-label="Zoom in">+</button>
+        <button id="tZoomOut" title="Zoom out" aria-label="Zoom out">−</button>
+        <button id="tFit" title="Fit parcel (F)">Fit <kbd>F</kbd></button>
+      </div>
+      <div class="grp"><button id="tRot" title="Rotate selected object 15° (R)">Rotate <kbd>R</kbd></button></div>
+    </div>
+    <div class="legend" id="legend" aria-hidden="true"></div>
+    <div class="hint" id="hint"></div>
+  </main>
+
+  <!-- ===== Results ===== -->
+  <aside class="panel right" aria-label="Results">
+    <section class="yield">
+      <div class="big">
+        <div><small>Required</small><strong id="oReq">0</strong></div>
+        <div><small>Provided</small><strong id="oProv">0</strong></div>
+      </div>
+      <div class="verdict ok" id="verdict"><span class="dot"></span><span id="verdictText">—</span></div>
+      <div class="meter" aria-hidden="true"><b id="meterFill"></b><s id="meterGarage"></s><i id="meterReq"></i></div>
+      <div class="meterlbl"><span>0</span><span id="meterMax">—</span></div>
+      <div class="summ" id="checkSumm"></div>
+    </section>
+    <div class="rtabs"><div class="tabs" role="tablist" id="rTabs">
+      <button role="tab" aria-selected="true" data-r="scen">Layouts</button>
+      <button role="tab" aria-selected="false" data-r="checks">Checks <span class="badge" id="chkBadge"></span></button>
+      <button role="tab" aria-selected="false" data-r="metrics">Metrics</button>
+      <button role="tab" aria-selected="false" data-r="cost">Cost</button>
+      <button role="tab" aria-selected="false" data-r="site">Site data</button>
+    </div></div>
+    <div class="pane" data-rpane="site" hidden><div id="siteDataOut"></div></div>
+    <div class="pane" data-rpane="scen">
+      <p class="note">Every enabled stall angle is tested against dozens of aisle orientations and row offsets inside the paving envelope.</p>
+      <div class="scen" id="scenList"></div>
+      <div class="sub">Building placement</div>
+      <p class="note">Moves the selected building or object around the envelope and ranks spots by surface parking.</p>
+      <button class="btn primary" id="btnPlace">Test positions for selected</button>
+      <div class="scen" id="placeList"></div>
+    </div>
+    <div class="pane" data-rpane="checks" hidden><div id="checksOut"></div></div>
+    <div class="pane" data-rpane="metrics" hidden><div id="metricsOut"></div><div class="btns"><button class="btn" id="btnCopy">Copy summary</button></div></div>
+    <div class="pane" data-rpane="cost" hidden><div id="costOut"></div></div>
+    <div class="pane" id="exportPane" hidden>
+      <div class="sub">Project file</div>
+      <p class="note">Every input keyed by its schema id, plus calculated values and check results. Copy it, or save it from the standalone copy.</p>
+      <textarea class="json" id="exportText" readonly spellcheck="false" aria-label="Project JSON"></textarea>
+      <div class="btns"><button class="btn primary" id="btnCopyJSON">Copy JSON</button><button class="btn" id="btnDownloadJSON">Download .json</button><button class="btn" id="btnCloseExport">Close</button></div>
+    </div>
+  </aside>
+</div>
+
+<script>
+/*APP*/
+</script>
