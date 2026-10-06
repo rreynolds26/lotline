@@ -1165,12 +1165,12 @@ function netBuildable(pe, ex) {
   return n * step * step;
 }
 async function runSearch() {
-  const my = ++gen;
-  if (S.P.empty) { S.scen = []; S.layout = null; renderResults(); draw(); return; }
+  const my = ++gen; S.solving = true;
+  if (S.P.empty) { S.solving = false; S.scen = []; S.layout = null; renderResults(); draw(); return; }
   computeEnv();
   const R = S.env.paving;
   S.env.net = netBuildable(R, exclusions().noPave.filter(p => !driveways().some(d => d.poly === p)));
-  if (!R) { S.scen = []; S.layout = null; renderResults(); draw(); setStatus('Buffers leave no room to park'); return; }
+  if (!R) { S.solving = false; S.scen = []; S.layout = null; renderResults(); draw(); setStatus('Buffers leave no room to park'); return; }
   const O = obstacles(), P = solverParams();
   const thetas = uniqAngles([...edgeAngles(R), ...S.objs.filter(o => APRON_KINDS.has(o.kind)).flatMap(o => [o.rot, o.rot + 90]), ...Array.from({ length: 72 }, (_, i) => i * 2.5)]);
   const al = alphas();
@@ -1197,6 +1197,7 @@ async function runSearch() {
     .sort((a, b) => goalReq ? ((b.eff >= needEff) - (a.eff >= needEff)) || (a.eff >= needEff ? a.W.paved - b.W.paved : b.eff - a.eff) : b.eff - a.eff);
   const pref = +F('parking.stallAngle') || 90;
   S.layout = S.scen.find(s => s.alpha === pref && (!goalReq || s.eff >= needEff)) || S.scen[0] || null;
+  S.solving = false;
   setStatus(`${fmt(jobs.length * 15 * (P.compactPct > 0 ? 2 : 1))} layouts tested`, null);
   renderResults(); draw();
 }
@@ -1338,7 +1339,8 @@ function analyze() {
   const outEnv = S.objs.filter(o => APRON_KINDS.has(o.kind)).filter(o => !env.building || !polyInside(objPoly(o), env.building) || ex.noBuild.some(p => polysOverlap(objPoly(o), p)));
   add('check.buildingInEnvelope', 'Buildings inside building envelope', !env.building ? 'fail' : outEnv.length ? 'fail' : 'pass', !env.building ? 'Setbacks leave no buildable area' : outEnv.length ? `${outEnv.map(o => o.name).join(', ')} crosses a setback, no-build easement or protected area` : 'All buildings and garages sit inside the setback lines');
   add('check.landFit', 'Program fits on buildable land', D['derived.landRequired'] <= D['derived.netBuildableArea'] ? 'pass' : 'fail', `Needs ${fmt(D['derived.landRequired'])} sf (footprint + ${fmt(num('parking.grossAreaPerStall', 325))} sf/stall + loading + pond + reserves) vs ${fmt(D['derived.netBuildableArea'])} sf net buildable`);
-  add('check.parkingProvided', 'Parking meets minimum', prov >= req ? 'pass' : 'fail', `${fmt(prov)} provided vs ${fmt(req)} required`);
+  if (S.solving) add('check.parkingProvided', 'Parking meets minimum', 'need', 'Solving parking layouts…');
+  else add('check.parkingProvided', 'Parking meets minimum', prov >= req ? 'pass' : 'fail', `${fmt(prov)} provided vs ${fmt(req)} required`);
   if (has('parking.maxRatioPer1000SF') && gfa > 0) add('check.parkingMax', 'Parking under the maximum', prov / (gfa / 1000) <= num('parking.maxRatioPer1000SF') + 1e-9 ? 'pass' : 'fail', `${fmt(prov / (gfa / 1000), 2)} vs max ${fmt(num('parking.maxRatioPer1000SF'), 2)} per 1,000 sf`);
   if (has('app.maxParkingPercentOfRequired') && req > 0) { const cap = Math.floor(req * num('app.maxParkingPercentOfRequired') / 100); add('check.parkingCap', 'Surface parking under the code maximum', surf <= cap ? 'pass' : 'fail', `${fmt(surf)} surface stalls vs a cap of ${fmt(cap)} (${fmt(num('app.maxParkingPercentOfRequired'))}% of ${fmt(req)} required). Move extra stalls into a garage or drop them.`); }
   if (has('app.bikePerAutoSpaces') && req > 0) { const need = num('app.bikeMinimum') + Math.ceil(req / Math.max(1, num('app.bikePerAutoSpaces'))); const have = num('access.bikeParkingSpaces'); add('check.bike', 'Bicycle parking meets minimum', have >= need ? 'pass' : 'warn', `${fmt(have)} provided vs ${fmt(need)} required (${fmt(num('app.bikeMinimum'))} + 1 per ${fmt(num('app.bikePerAutoSpaces'))} car spaces). Set Bicycle parking spaces in Access.`); }
@@ -1373,6 +1375,7 @@ function analyze() {
   if (L) { for (const a of L.W.aisles) if (a.w >= laneW - 1e-6) lanes.push({ poly: a.poly, w: a.w }); for (const c of L.W.connectors) if (c.w >= laneW - 1e-6) lanes.push({ poly: c.poly, w: c.w }); }
   for (const d of dws) if (d.w >= laneW) lanes.push({ poly: d.poly, w: d.w });
   if (!bs.length) add('check.fireAccess', 'Fire lane reaches all sides', 'manual', 'No buildings');
+  else if (S.solving && !lanes.length) add('check.fireAccess', 'Fire lane reaches all sides', 'need', 'Solving parking layouts…');
   else if (!lanes.length) add('check.fireAccess', 'Fire lane reaches all sides', 'fail', `No drive aisle is at least ${fmt(laneW)} ft wide`);
   else {
     let worst = 0;
