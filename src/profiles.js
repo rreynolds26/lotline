@@ -42,11 +42,13 @@ const ACC_PARKING = {
 const NONRES_BUFFER = { 'zoning.bufferAdjacentResidential': 20 }; // 20 ft landscape strip (or 10 ft wall, or 50 ft natural)
 const resYard = (base, start, perFt) => ({ 'app.resYardBase': base, 'app.resYardHeightStart': start, 'app.resYardPerFt': perFt });
 const pct = (landscaped) => ({ 'siteFeatures.landscapeAreaMinPercent': landscaped, 'zoning.minOpenSpace': landscaped, 'zoning.maxImpervious': 100 - landscaped });
+// The use a new building starts with in each district, so its parking ratio matches what the district is for.
+const ACC_DEFAULT_USE = { 'C-O': 'office', 'E-O': 'office', 'IN': 'office', 'G': 'office', 'P': 'office', 'E-I': 'industrial_warehouse', 'I': 'industrial_warehouse', 'RM-1': 'multifamily', 'RM-2': 'multifamily', 'RM-3': 'multifamily' };
 function accDistrict(code, label, v, extra = {}) {
   return {
     group: 'Athens-Clarke County, GA', label: `ACC ${code} · ${label}`, verified: true, district: code,
     note: extra.note || '', uses: accUses(code === 'C-D'),
-    values: { ...ACC_PARKING, ...v, 'zoning.district': code },
+    values: { ...ACC_PARKING, 'zoning.useType': ACC_DEFAULT_USE[code] || 'retail', ...v, 'zoning.district': code },
   };
 }
 const ACC_PROFILES = {
