@@ -424,8 +424,12 @@ function driveways() {
     return { item: a, poly, c, edge: best.i, front: edges[best.i] && edges[best.i].cls === 'front', t, L, w, dep, u: [ux, uy], n: [nx, ny] };
   });
 }
+/* Site area: the lot polygon less any holes (separately owned outparcels) cut out of it. */
+function parcelArea() { return Math.max(0, Math.abs(area(S.parcel)) - listF('parcel.easements').filter(e => e.hole && e.geometry && e.geometry.length >= 3).reduce((a, e) => a + Math.abs(area(e.geometry)), 0)); }
 function exclusions() {
   const ease = listF('parcel.easements').filter(e => e.geometry && e.geometry.length >= 3);
+  // A hole's edges are lot lines shared with its owner, so keep the side setback (building) and side buffer (paving) around it.
+  const grow = (e, d) => e.hole && d > 0 ? (inset(e.geometry, -d) || e.geometry) : e.geometry;
   const flood = listF('siteConditions.floodplainAreas').filter(p => p.length >= 3);
   const wb = num('siteConditions.wetlandBuffer');
   const wet = listF('siteConditions.wetlands').filter(p => p.length >= 3).map(w => (wb > 0 ? inset(w, -wb) : null) || ccw(w));
@@ -434,8 +438,8 @@ function exclusions() {
   const exist = F('siteConditions.demolitionRequired') ? [] : listF('siteConditions.existingStructures').filter(p => p.length >= 3);
   const pond = F('stormwater.pondLocation'); const pondL = pond && pond.length >= 3 ? [pond] : [];
   return {
-    noPave: [...ease.filter(e => !e.pavingAllowed).map(e => e.geometry), ...flood, ...wet, ...streams, ...trees, ...exist, ...pondL, ...driveways().map(d => d.poly)],
-    noBuild: [...ease.filter(e => !e.buildingAllowed).map(e => e.geometry), ...flood, ...wet, ...streams, ...exist, ...pondL],
+    noPave: [...ease.filter(e => !e.pavingAllowed).map(e => grow(e, num('zoning.bufferSide'))), ...flood, ...wet, ...streams, ...trees, ...exist, ...pondL, ...driveways().map(d => d.poly)],
+    noBuild: [...ease.filter(e => !e.buildingAllowed).map(e => grow(e, num('zoning.setbackSide'))), ...flood, ...wet, ...streams, ...exist, ...pondL],
   };
 }
 const APRON_KINDS = new Set(['building', 'garage']);
@@ -458,6 +462,16 @@ function edgeAngles(poly) {
     let t = Math.atan2(b[1] - a[1], b[0] - a[0]) / DEG; t = ((t % 180) + 180) % 180; out.push(Math.round(t * 4) / 4);
   }
   return out;
+}
+/* The k lot-line directions with the most edge length: enough for quick per-position solves on parcels with many corners. */
+function mainEdgeAngles(poly, k = 3) {
+  const w = [];
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length], len = Math.hypot(b[0] - a[0], b[1] - a[1]); if (len < 25) continue;
+    const t = ((Math.atan2(b[1] - a[1], b[0] - a[0]) / DEG) % 180 + 180) % 180;
+    const g = w.find(x => Math.min(Math.abs(x.t - t), 180 - Math.abs(x.t - t)) < 2); if (g) g.len += len; else w.push({ t: Math.round(t * 4) / 4, len });
+  }
+  return w.sort((x, y) => y.len - x.len).slice(0, k).map(x => x.t);
 }
 function uniqAngles(list) {
   const out = [];
@@ -526,11 +540,11 @@ function assignSpecial(W, total) {
 }
 
 /* ================= auto-placed site objects ================= */
-function findSpot(o, target, region, rots, avoid = null) {
+function findSpot(o, target, region, rots, avoid = null, n = 14) {
   const others = avoid === false ? [] : (avoid || objObstacles(o)).concat(exclusions().noBuild);
   const bb = bbox(region); let best = null;
-  for (const rd of rots) for (let i = 0; i <= 14; i++) for (let j = 0; j <= 14; j++) {
-    const at = { cx: bb.x0 + (bb.x1 - bb.x0) * i / 14, cy: bb.y0 + (bb.y1 - bb.y0) * j / 14, rot: rd };
+  for (const rd of rots) for (let i = 0; i <= n; i++) for (let j = 0; j <= n; j++) {
+    const at = { cx: bb.x0 + (bb.x1 - bb.x0) * i / n, cy: bb.y0 + (bb.y1 - bb.y0) * j / n, rot: rd };
     const poly = objPoly(o, 0, at);
     if (!polyInside(poly, region)) continue;
     if (others.some(ob => polysOverlap(poly, ob))) continue;
@@ -538,7 +552,7 @@ function findSpot(o, target, region, rots, avoid = null) {
   }
   if (best) { o.cx = best.cx; o.cy = best.cy; o.rot = ((best.rot % 360) + 360) % 360; return true; }
   // nothing is clear: keep it inside the region anyway so the overlap shows up in the checks
-  if (avoid !== false) return findSpot(o, target, region, rots, false);
+  if (avoid !== false) return findSpot(o, target, region, rots, false, n);
   o.cx = target[0]; o.cy = target[1]; return false;
 }
 function downhillTarget() {
@@ -557,7 +571,7 @@ function serviceTarget(pad) {
   return { pt: [b.cx + best.n[0] * off, b.cy + best.n[1] * off], rot: best.along === 'y' ? b.rot : b.rot + 90 };
 }
 function syncAutoObjects(reposition = false) {
-  const gross = Math.abs(area(S.parcel));
+  const gross = parcelArea();
   const reg = inset(S.parcel, 3) || S.parcel;
   // stormwater pond
   const pondLike = !!F('app.placePond');
@@ -598,7 +612,7 @@ let gen = 0, solveTimer = 0;
 const tickCh = new MessageChannel(), tickQ = []; tickCh.port1.onmessage = () => { const r = tickQ.shift(); if (r) r(); };
 const tick = () => new Promise(r => { tickQ.push(r); tickCh.port2.postMessage(0); });
 function setStatus(t, frac) { $('#statusText').textContent = t; $('#statusBar').style.width = frac == null ? '0' : (frac * 100).toFixed(0) + '%'; }
-function scheduleSolve(delay = 200) { S.solving = true; clearTimeout(solveTimer); solveTimer = setTimeout(runSearch, delay); save(); }
+function scheduleSolve(delay = 200) { S.solving = true; renderYield(); clearTimeout(solveTimer); solveTimer = setTimeout(runSearch, delay); save(); }
 /* How many stalls to draw when laying out only what's required: the requirement less garage stalls,
    plus stalls that become accessible-stall access aisles, plus the optional cushion. */
 function parkingTarget() {
@@ -726,7 +740,7 @@ async function testPlacements(opts = {}) {
   const out = []; let t0 = performance.now();
   for (let i = 0; i < cands.length; i++) {
     const c = cands[i]; const O = others.concat([objPoly(o, apron, c)]);
-    const thetas = uniqAngles([...edgeAngles(R), c.rot, c.rot + 90]);
+    const thetas = uniqAngles([...mainEdgeAngles(R), c.rot, c.rot + 90]);
     let best = null;
     for (const t of thetas) { const r = bestFor(R, O, t, alpha, P, 5); if (!best || r.count > best.count) best = r; }
     out.push({ ...c, count: best.count });
@@ -739,7 +753,9 @@ async function testPlacements(opts = {}) {
   S.place = picked.map(p => ({ ...p, objId: o.id }));
   if (opts.apply) {
     const best = picked[0], cur = out.find(p => p.cur);
-    if (best && (!cur || best.count > cur.count)) {
+    // only move it if where it sits now cannot hold the required parking
+    const short = !cur || estEffective(cur.count, F('app.reserveADA')) + garageTotal() < required();
+    if (best && short && (!cur || best.count > cur.count)) {
       S.moveNote = { id: o.id, prev: { cx: o.cx, cy: o.cy, rot: o.rot }, text: `With the existing building gone, ${o.name} moved to the spot with the most room for parking (≈${fmt(best.count)} stalls${cur ? ` vs ≈${fmt(cur.count)} where it was` : ''}).` };
       o.cx = best.cx; o.cy = best.cy; o.rot = Math.round(best.rot * 100) / 100; renderObjList(); renderObjEditor(); draw();
     }
@@ -752,7 +768,7 @@ async function testPlacements(opts = {}) {
 function analyze() {
   if (!S.env) computeEnv();
   const env = S.env, P = S.parcel;
-  const gross = Math.abs(area(P)), acres = gross / 43560;
+  const gross = parcelArea(), acres = gross / 43560;
   const bs = buildings(), gs = garages();
   const gfa = totalGFA(), fpB = bs.reduce((s, o) => s + fpOf(o), 0), fpG = gs.reduce((s, o) => s + fpOf(o), 0);
   const L = S.layout, surf = L ? L.eff : 0, gar = garageTotal(), prov = surf + gar;
@@ -887,7 +903,7 @@ function analyze() {
   else {
     const aw = num('fire.aerialAccessWidth', 26); const wide = lanes.filter(l => l.w >= aw - 1e-6);
     const ok = tallFire.every(o => { const p = objPoly(o); return [0, 1, 2, 3].some(k => { const a = p[k], b = p[(k + 1) % 4]; let hit = 0; for (let j = 0; j <= 10; j++) { const q = [a[0] + (b[0] - a[0]) * j / 10, a[1] + (b[1] - a[1]) * j / 10]; if (wide.some(l => polyDist(q, l.poly) <= 30)) hit++; } return hit >= 10; }); });
-    add('check.aerialAccess', 'Aerial access provided where required', ok ? 'pass' : 'fail', ok ? `A ${fmt(aw)} ft lane runs along one full side` : `${tallFire.map(o => o.name).join(', ')} need a ${fmt(aw)} ft aerial lane within 30 ft of one full side. Widen the 90° aisle to ${fmt(aw)} ft or add a lane.`);
+    add('check.aerialAccess', 'Aerial access provided where required', ok ? 'pass' : 'fail', ok ? `A ${fmt(aw)} ft lane runs along one full side` : `${tallFire.map(o => o.name).join(', ')} need${tallFire.length > 1 ? '' : 's'} a ${fmt(aw)} ft aerial lane within 30 ft of one full side. Widen the 90° aisle to ${fmt(aw)} ft or add a lane.`);
   }
   if (L && !dws.length && F('fire.turnaroundType') === 'none' && L.W.maxDead > num('fire.deadEndMaxLength', 150)) add('check.deadEnd', 'Dead ends have turnarounds', 'need', `An aisle runs ${fmt(L.W.maxDead)} ft without a connection at both ends (limit ${fmt(num('fire.deadEndMaxLength', 150))} ft). Place your driveways in Access & circulation, or pick a turnaround type in Fire access.`);
   else if (L) add('check.deadEnd', 'Dead ends have turnarounds', F('fire.turnaroundType') !== 'none' || L.W.maxDead <= num('fire.deadEndMaxLength', 150) ? 'pass' : 'fail', `Longest aisle not connected at both ends: ${fmt(L.W.maxDead)} ft vs ${fmt(num('fire.deadEndMaxLength', 150))} ft. Driveway connections are not counted.`);
@@ -1563,6 +1579,7 @@ function renderObjEditor() {
     body = `<div class="row"><label class="f"><span>Name</span><input type="text" class="plain" id="oName" value="${esc(o.name)}"></label><label class="f"><span>Use (sets parking ratio)</span><select id="oUse">${useOptions(o.use)}</select></label></div>
       ${dims}
       <div class="row"><label class="f"><span>Gross floor area</span><div class="unit"><input type="number" id="oGFA" min="100" step="100"><em>sf</em></div></label><label class="f"><span>Parking required</span><input type="text" id="oReqB" readonly tabindex="-1"></label></div>
+      <div class="btns"><button class="btn" id="oMax" title="Grow or shrink this building, keeping its stories and proportions, to the largest size the setbacks, FAR, lot coverage and parking allow">Max out this building</button></div>
       <div class="fgrid" id="g-bldg">${PER_BLDG.filter(f => !['building.orientation', 'building.footprint'].includes(f.id)).map(f => fieldHTML(f, bget(o, f.id), 'b')).join('')}</div>
       <div class="btns"><button class="btn" id="oAlign">Align to longest lot line</button><button class="btn ghost" id="oDel">Remove</button></div>`;
   } else if (o.kind === 'garage') {
@@ -1592,6 +1609,7 @@ function renderObjEditor() {
   numIn('#oFl', v => { o.floors = Math.max(1, Math.round(v)); });
   numIn('#oRot', v => { o.rot = ((v % 360) + 360) % 360; });
   numIn('#oGFA', v => { if (v <= 0) return; const k = Math.sqrt(v / o.floors / fpOf(o)); o.w = Math.round(o.w * k * 10) / 10; o.d = Math.round(o.d * k * 10) / 10; });
+  if ($('#oMax')) $('#oMax').addEventListener('click', () => maxOutBuilding());
   if ($('#oUndoMove')) $('#oUndoMove').addEventListener('click', () => { const m = S.moveNote; Object.assign(o, m.prev); afterObjEdit(); renderObjEditor(); });
   if ($('#oDemo')) $('#oDemo').addEventListener('click', () => { S.F['siteConditions.demolitionRequired'] = true; S.touched.add('siteConditions.demolitionRequired'); rerenderField('siteConditions.demolitionRequired'); renderObjEditor(); onFieldChange('siteConditions.demolitionRequired'); });
   el.querySelectorAll('[data-rot]').forEach(b => b.addEventListener('click', () => { o.rot = (((o.rot - +b.dataset.rot) % 360) + 360) % 360; afterObjEdit(); refreshObjFields(true); }));
@@ -1603,6 +1621,61 @@ function renderObjEditor() {
     const surface = S.layout ? S.layout.eff : 0; const short = required() - surface - (garageTotal() - garageStalls(o));
     const perLvl = Math.max(1, Math.floor(o.w * o.d / o.sfPerStall)); o.floors = Math.max(1, Math.ceil(short / perLvl)); afterObjEdit(); refreshObjFields(true);
   });
+}
+/* Find the largest size for the selected building (same stories and proportions) that stays inside the building
+   envelope clear of other objects, keeps FAR and lot coverage under their limits, and leaves room for its parking. */
+async function maxOutBuilding() {
+  const o = selObj(); if (!o || o.kind !== 'building') return;
+  computeEnv(); const envB = S.env.building, R = S.env.paving;
+  if (!envB || !R) { setStatus('Setbacks leave no buildable area', null); return; }
+  const my = ++gen; clearTimeout(solveTimer); S.solving = true;
+  const btn = $('#oMax'); if (btn) { btn.disabled = true; btn.textContent = 'Searching…'; }
+  const prev = { w: o.w, d: o.d, cx: o.cx, cy: o.cy, rot: o.rot };
+  const gross = parcelArea(), P = solverParams(), al = alphas(), gar = garageTotal(), rots = uniqAngles([prev.rot, prev.rot + 90]);
+  const maxFAR = has('zoning.maxFAR') ? num('zoning.maxFAR') : Infinity, maxCov = has('zoning.maxLotCoverage') ? num('zoning.maxLotCoverage') : Infinity;
+  const otherGFA = totalGFA() - gfaOf(o), otherFP = buildings().filter(b => b !== o).reduce((s, b) => s + fpOf(b), 0);
+  const test = (k) => {
+    o.w = prev.w * k; o.d = prev.d * k;
+    if ((otherGFA + gfaOf(o)) / gross > maxFAR + 1e-9) return 'FAR';
+    if ((otherFP + fpOf(o)) / gross * 100 > maxCov + 1e-9) return 'lot coverage';
+    // finer grid than a normal placement so large lots don't miss a spot that fits (about 3% of the lot's width)
+    findSpot(o, [prev.cx, prev.cy], envB, rots, null, 32);
+    const poly = objPoly(o);
+    if (!polyInside(poly, envB) || objObstacles(o).concat(exclusions().noBuild).some(ob => polysOverlap(poly, ob))) return 'envelope';
+    const O = obstacles(), thetas = uniqAngles([...mainEdgeAngles(R), o.rot, o.rot + 90]);
+    let cap = 0; for (const a of al) for (const t of thetas) cap = Math.max(cap, bestFor(R, O, t, a, P, 5).count);
+    const prov = estEffective(cap, F('app.reserveADA')) + gar, req = required();
+    return prov >= req ? null : 'parking';
+  };
+  // Grow until something fails, then bisect between the last size that worked and the first that did not.
+  let lo = 0, hi = 1, why = test(1), lim = why;
+  if (!why) { lo = 1; hi = 1.5; while (!(lim = test(hi)) && hi < 400) { lo = hi; hi *= 1.5; await tick(); if (my !== gen) return; } }
+  for (let i = 0; i < 12 && hi / Math.max(lo, 1e-6) > 1.004; i++) {
+    const mid = lo ? Math.sqrt(lo * hi) : hi / 2, r = test(mid);
+    if (r) { hi = mid; lim = r; } else lo = mid;
+    setStatus(`Sizing ${o.name}: ${fmt(gfaOf(o))} sf`, (i + 1) / 12); await tick(); if (my !== gen) return;
+  }
+  if (btn) { btn.disabled = false; btn.textContent = 'Max out this building'; }
+  if (!lo) { Object.assign(o, prev); S.moveNote = null; S.placeNote = `${o.name} can't fit with its parking even when small. Check the setbacks and parking ratio, or add a garage.`; renderObjEditor(); scheduleSolve(0); return; }
+  // Round down to the nearest 100 sf, then place it for good.
+  const target = Math.floor(prev.w * prev.d * o.floors * lo * lo / 100) * 100, k = Math.sqrt(target / (prev.w * prev.d * o.floors));
+  test(k);
+  // The quick estimate skips the accessible-stall layout, so it can run a stall or two high. Confirm with the full
+  // solver and step the size down by the shortfall until the parking really fits.
+  for (let i = 0; i < 6; i++) {
+    await runSearch();
+    const req = required(), short = req - ((S.layout ? S.layout.eff : 0) + gar);
+    if (short <= 0) break;
+    lim = 'parking';
+    const g = Math.floor(gfaOf(o) * (1 - (short + 0.5) / Math.max(req, 1)) / 100) * 100;
+    if (g < 100) break;
+    test(Math.sqrt(g / (prev.w * prev.d * o.floors)));
+  }
+  const limText = { parking: 'the parking it needs', FAR: 'the FAR limit', 'lot coverage': 'the lot coverage limit', envelope: 'the edge of the buildable area (setbacks, buffers and other objects)' }[lim] || lim;
+  const hint = lim === 'parking' ? 'More parking (a garage, or a lower ratio) would let it grow.' : lim === 'FAR' ? 'FAR caps total floor area, so more stories will not help.' : 'Adding stories would add floor area on the same footprint.';
+  S.moveNote = { id: o.id, prev, text: `Largest ${o.name} that works: ${fmt(gfaOf(o))} sf on ${o.floors} ${o.floors > 1 ? 'stories' : 'story'} (${fmt(o.w)}' × ${fmt(o.d)}'), needing ${fmt(required())} stalls. It stops at ${limText}. ${hint}` };
+  S.placeNote = null; S.place = []; renderPlacements();
+  renderObjList(); renderObjEditor(); renderReqBreak(); renderResults(); draw(); save();
 }
 /* After demolition clears the lot, re-test positions for the selected building (or the only one). */
 function resiteAfterDemo() {
@@ -1909,11 +1982,12 @@ $('#btnDelProfile').addEventListener('click', () => { const k = String(S.P.profi
 /* ================= results ================= */
 function renderParcelFacts() {
   if (S.P.empty) { $('#parcelFacts').innerHTML = '<p class="note">No parcel loaded.</p>'; return; }
-  const a = Math.abs(area(S.parcel)); const env = S.env || computeEnv();
+  // Net of setbacks, buffers, easements, parcel holes, floodplain, wetlands and kept structures.
+  const a = parcelArea(); const env = S.env || computeEnv(); const ex = exclusions();
   $('#parcelFacts').innerHTML = `
     <div class="kv"><span>Site area</span><b>${fmt(a)} sf · ${fmt(a / 43560, 2)} ac</b></div>
-    <div class="kv"><span>Building envelope</span><b>${env.building ? fmt(Math.abs(area(env.building))) + ' sf' : 'none'}</b></div>
-    <div class="kv"><span>Paving envelope</span><b>${env.paving ? fmt(Math.abs(area(env.paving))) + ' sf' : 'none'}</b></div>
+    <div class="kv"><span>Buildable area (net)</span><b>${env.building ? fmt(netBuildable(env.building, ex.noBuild)) + ' sf' : 'none'}</b></div>
+    <div class="kv"><span>Pavable area (net)</span><b>${env.paving ? fmt(netBuildable(env.paving, ex.noPave)) + ' sf' : 'none'}</b></div>
     <div class="kv"><span>Frontage · perimeter</span><b>${fmt(env.frontLen)} · ${fmt(perimeter(S.parcel))} ft</b></div>
     ${S.geo ? `<div class="kv"><span>Located at</span><b>${S.geo.lat.toFixed(5)}, ${S.geo.lng.toFixed(5)}</b></div>` : ''}`;
 }
@@ -1921,6 +1995,7 @@ function renderYield() {
   if (S.P.empty) { $('#oReq').textContent = '—'; $('#oProv').textContent = '—'; $('#verdict').className = 'verdict ok'; $('#verdictText').textContent = 'No parcel loaded. Search an address or pick a parcel.'; $('#meterFill').style.width = '0'; $('#meterGarage').style.width = '0'; $('#meterMax').textContent = '—'; return; }
   const req = required(); const L = S.layout; const surf = L ? L.eff : 0; const gar = garageTotal(); const prov = surf + gar;
   $('#oReq').textContent = fmt(req); $('#oProv').textContent = fmt(prov);
+  if (S.solving && !(L && L.live)) { $('#oProv').textContent = '…'; $('#verdict').className = 'verdict ok'; $('#verdictText').textContent = 'Solving parking layouts…'; return; }
   const ok = prov >= req; const v = $('#verdict'); v.className = 'verdict ' + (ok ? 'ok' : 'bad');
   $('#verdictText').textContent = !L && !gar ? 'No layout fits inside the paving envelope' : ok ? (prov === req ? 'Meets requirement exactly' : `Meets requirement · ${fmt(prov - req)} surplus`) : `Short by ${fmt(req - prov)} stalls`;
   const max = Math.max(req, prov, 1) * 1.1;
@@ -2249,8 +2324,8 @@ function sitesPut(list) { try { localStorage.setItem(SITES_KEY, JSON.stringify(l
 const siteKey = () => S.ctx && S.ctx.report && S.ctx.report.parcel ? S.ctx.report.parcel.PARCEL_NO : null;
 function siteName() {
   const r = S.ctx && S.ctx.report;
-  if (r && r.parcel) return `${(r.parcel.PAR_ADD || '').trim() || 'Parcel'} · ${r.parcel.PARCEL_NO}`;
-  return S.geo ? `Site near ${S.geo.lat.toFixed(4)}, ${S.geo.lng.toFixed(4)}` : `Site of ${fmt(Math.abs(area(S.parcel)) / 43560, 2)} ac`;
+  if (r && r.parcel) return `${(r.parcel.PAR_ADD || '').trim() || 'Parcel'} · ${tidyPno(r.parcel.PARCEL_NO)}`;
+  return S.geo ? `Site near ${S.geo.lat.toFixed(4)}, ${S.geo.lng.toFixed(4)}` : `Site of ${fmt(parcelArea() / 43560, 2)} ac`;
 }
 const hasDesign = () => !S.P.empty && (S.objs.some(o => APRON_KINDS.has(o.kind)) || !!(S.ctx && S.ctx.report));
 function archiveSite() {

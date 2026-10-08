@@ -135,6 +135,8 @@ select, input[type="text"].plain, input[type="search"] { font-family: var(--f-bo
 textarea { resize: vertical; min-height: 92px; line-height: 1.5; }
 .unit { position: relative; }
 .unit input { padding-right: 46px; }
+/* short units (ft, deg) in the narrow three-across rows need less room, or 3-digit values get cut off */
+.row3 .unit input { padding-right: 24px; padding-left: 6px; }
 .unit em { position: absolute; right: 7px; top: 50%; transform: translateY(-50%); font-style: normal; font-size: 10.5px; color: var(--muted); font-family: var(--f-mono); pointer-events: none; max-width: 40px; overflow: hidden; white-space: nowrap; }
 .check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; cursor: pointer; }
 .check input { accent-color: var(--c-asphalt); width: 15px; height: 15px; margin: 0; }

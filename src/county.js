@@ -98,6 +98,7 @@ async function loadOverlay() {
   ovBusy = false;
   if (ovAgain) { ovAgain = false; scheduleOverlay(); }
 }
+const tidyPno = (s) => String(s || '').replace(/\s+/g, ' ').trim();
 function reprojectOverlay() { for (const p of CTX.parcels.values()) p.rings = ringsOf(p.g); }
 function parcelAt(w) { for (const p of CTX.parcels.values()) for (const r of p.rings) if (inside(w, r)) return p; return null; }
 
@@ -139,7 +140,14 @@ async function loadCountyParcel(p) {
   const lng0 = Math.min(...ring0.map(q => q[0])), lat0 = Math.min(...ring0.map(q => q[1]));
   S.geo = { lat: lat0, lng: lng0 }; mapState = mapState === 'blocked' ? 'blocked' : 'idle';
   reprojectOverlay();
-  const rings = ringsOf(p.g); const ring = rings.reduce((a, r) => Math.abs(area(r)) > Math.abs(area(a)) ? r : a, rings[0]);
+  // Esri polygons: outer rings run clockwise and holes counter-clockwise. The largest outer ring is the lot;
+  // holes inside it are separately owned outparcels and become no-build, no-pave areas.
+  const sgn = (r) => { let s = 0; for (let i = 0; i < r.length - 1; i++) s += r[i][0] * r[i + 1][1] - r[i + 1][0] * r[i][1]; return s; };
+  const raw = (p.g.rings || []).filter(r => r.length >= 4), toW = (r) => ccw(r.slice(0, -1).map(([x, y]) => ll2w(x, y)));
+  const outers = raw.filter(r => sgn(r) < 0).map(toW).filter(r => Math.abs(area(r)) > 4), pool = outers.length ? outers : ringsOf(p.g);
+  const ring = pool.reduce((a, r) => Math.abs(area(r)) > Math.abs(area(a)) ? r : a, pool[0]);
+  const holes = raw.filter(r => sgn(r) > 0).map(toW).filter(h => Math.abs(area(h)) > 4 && inside(h[0], ring)).map(h => ccw(h.map(q => [+q[0].toFixed(2), +q[1].toFixed(2)])));
+  const holeEase = holes.map(h => ({ type: 'other', geometry: h, buildingAllowed: false, pavingAllowed: false, note: 'Not part of this parcel (separately owned outparcel)', hole: true }));
   for (const id of GEO_FIELDS) { delete S.F[id]; S.touched.delete(id); }
   CTX.water = []; CTX.sewer = []; CTX.hydrants = []; CTX.manholes = []; CTX.roads = []; CTX.intersections = [];
   S.parcel = ccw(ring.map(q => [+q[0].toFixed(2), +q[1].toFixed(2)]));
@@ -148,9 +156,11 @@ async function loadCountyParcel(p) {
   CTX.report = R;
   const set = (id, v, why) => { if (v === undefined || v === null || (typeof v === 'number' && !isFinite(v))) return; S.F[id] = v; S.touched.add(id); R.filled.push([id, v, why]); };
   const find = (group, text, level = 'info') => R.findings.push({ group, text, level });
+  if (holeEase.length) { set('parcel.easements', holeEase, 'Holes in the county parcel'); find('Parcel', `The parcel boundary has ${holes.length} hole${holes.length > 1 ? 's' : ''} (${fmt(holes.reduce((a, h) => a + Math.abs(area(h)), 0) / 43560, 2)} ac) owned separately. ${holes.length > 1 ? 'They are' : 'It is'} left out of the site area, with side setbacks and buffers kept around ${holes.length > 1 ? 'them' : 'it'}.`, 'warn'); }
+  if (outers.length > 1) find('Parcel', `The county parcel has ${outers.length} separate pieces; only the largest (${fmt(Math.abs(area(ring)) / 43560, 2)} ac) is modeled.`, 'warn');
   setStatus('Loading parcel data…', 0.05); renderSiteData();
   const rec = (p.a.PAR_ADD || '').trim();
-  const label = p.matched && rec && p.matched.toUpperCase() !== rec.toUpperCase() ? `<b>${esc(p.matched)}</b>, which is on parcel ${esc(p.a.PARCEL_NO)} (recorded as ${esc(rec)})` : `<b>${esc(rec || p.a.PARCEL_NO)}</b> (parcel ${esc(p.a.PARCEL_NO)})`;
+  const label = p.matched && rec && p.matched.toUpperCase() !== rec.toUpperCase() ? `<b>${esc(p.matched)}</b>, which is on parcel ${esc(tidyPno(p.a.PARCEL_NO))} (recorded as ${esc(rec)})` : `<b>${esc(rec || tidyPno(p.a.PARCEL_NO))}</b> (parcel ${esc(tidyPno(p.a.PARCEL_NO))})`;
   searchMsg(`Found ${label}. Loading zoning, utilities, flood, soils and topography…`);
   afterParcelChange(true, true);
 
@@ -164,8 +174,8 @@ async function loadCountyParcel(p) {
 
   // parcel basics
   set('parcel.boundary', P, 'County parcel');
-  set('parcel.grossAreaAcres', +(Math.abs(area(P)) / 43560).toFixed(3), 'Computed from county boundary');
-  find('Parcel', `${p.a.PARCEL_NO} · ${(p.a.PAR_ADD || '').trim()} · ${fmt(p.a.ACRES, 2)} ac on the tax record (${fmt(Math.abs(area(P)) / 43560, 2)} ac by geometry)`);
+  set('parcel.grossAreaAcres', +(parcelArea() / 43560).toFixed(3), 'Computed from county boundary');
+  find('Parcel', `${tidyPno(p.a.PARCEL_NO)} · ${(p.a.PAR_ADD || '').trim()} · ${fmt(p.a.ACRES, 2)} ac on the tax record (${fmt(parcelArea() / 43560, 2)} ac by geometry)`);
 
   jobs.push(safe('Parcel record', async () => {
     const f = (await arcQuery(`${CL}/0`, { where: `PARCEL_NO='${p.a.PARCEL_NO}'`, geometry: false }))[0];
@@ -337,17 +347,17 @@ async function loadCountyParcel(p) {
       arcQuery(`${ACC}/ACC_Watersheds/FeatureServer/0`, { geom: P, geometry: false, fields: 'NAME' }).catch(() => []),
     ]);
     const wp = wet.flatMap(f => ringsOf(f.geometry)).map(r => clipPoly(r, site)).filter(Boolean);
-    if (wp.length) { set('siteConditions.wetlands', wp, 'County wetlands layer'); find('Environment', `${wp.length} mapped wetland area${wp.length > 1 ? 's' : ''} on or next to the parcel (${[...new Set(wet.map(f => f.attributes.CLASS_CODE))].join(', ')}). Confirm with a delineation.`, 'warn'); }
+    if (wp.length) { set('siteConditions.wetlands', wp, 'County wetlands layer'); find('Environment', `${wp.length} mapped wetland area${wp.length > 1 ? 's' : ''} on or next to the parcel${(() => { const c = [...new Set(wet.map(f => (f.attributes.CLASS_CODE || '').trim()).filter(Boolean))]; return c.length ? ` (${c.join(', ')})` : ''; })()}. Confirm with a delineation.`, 'warn'); }
     const st = hydro.flatMap(f => pathsOf(f.geometry)).flatMap(l => clipLine(l, site)).filter(l => polyLen(l) > 15);
     if (st.length) { set('siteConditions.streams', st, 'County hydrology lines'); find('Environment', `${st.length} mapped stream or drainage line${st.length > 1 ? 's' : ''} on or next to the parcel. State waters carry a 25 ft buffer; ACC river buffers may be larger.`, 'warn'); }
-    const easements = [];
+    const easements = [...holeEase];
     for (const [fs, name] of [[b75, '75 ft river buffer'], [b100, '100 ft river buffer'], [b150, '150 ft river buffer'], [b200, '200 ft state water buffer']]) for (const f of fs) for (const r of ringsOf(f.geometry)) { if (!touchesParcel(r)) continue; const c = clipPoly(r, site); if (c) easements.push({ type: 'conservation', geometry: c, buildingAllowed: false, pavingAllowed: false, note: name }); }
-    if (easements.length) { set('parcel.easements', easements, 'County river and state-water buffers'); find('Environment', `River or state-water buffer crosses the parcel: ${[...new Set(easements.map(e => e.note))].join(', ')}. Added as no-build, no-pave areas.`, 'warn'); }
+    if (easements.length > holeEase.length) { set('parcel.easements', easements, 'County river and state-water buffers'); find('Environment', `River or state-water buffer crosses the parcel: ${[...new Set(easements.filter(e => !e.hole).map(e => e.note))].join(', ')}. Added as no-build, no-pave areas.`, 'warn'); }
     const bp = bld.flatMap(f => ringsOf(f.geometry)).filter(touchesParcel).map(r => clipPoly(r, site)).filter(Boolean);
     if (bp.length) { set('siteConditions.existingStructures', bp, 'County building footprints'); find('Site', `${bp.length} existing building${bp.length > 1 ? 's' : ''} (${fmt(bp.reduce((s, b) => s + Math.abs(area(b)), 0))} sf of footprint). Turn on “Demolition required” to clear them.`, 'info'); }
     if (imp.length) {
       // The county stores one record per surface type (parking, building, sidewalk...); add them up.
-      const siteAc = +imp[0].attributes.ACRES || Math.abs(area(S.parcel)) / 43560;
+      const siteAc = +imp[0].attributes.ACRES || parcelArea() / 43560;
       const byType = {}; let ac = 0;
       for (const r of imp) { const a = +r.attributes.ImpervAcres || 0; ac += a; const t = (r.attributes.Type || 'other').trim(); byType[t] = (byType[t] || 0) + a; }
       const frac = Math.min(1, ac / siteAc);
@@ -435,7 +445,7 @@ async function loadCountyParcel(p) {
   S.P.profile = S.P.profile; syncAutoObjects(true);
   renderAllSections(); computeEnv(); renderParcelFacts(); renderLegend(); renderObjList(); renderObjEditor(); renderReqBreak(); renderAnalysis(); renderSiteData();
   draw(); scheduleSolve(0);
-  setStatus(`Loaded ${p.a.PARCEL_NO}: ${R.filled.length} inputs filled`, null);
+  setStatus(`Loaded ${tidyPno(p.a.PARCEL_NO)}: ${R.filled.length} inputs filled`, null);
   searchMsg(`Loaded ${label} in ${fmt(R.ms / 1000, 0)} s: ${R.filled.length} inputs filled. Add your buildings under <b>Buildings &amp; site objects</b>; findings are in the <b>Site data</b> tab.`, 'ok');
   $('#rTabs [data-r="site"]').click();
 }
@@ -501,7 +511,7 @@ function renderSiteData() {
   const order = ['Zoning', 'Access', 'Utilities', 'Environment', 'Topography', 'Site', 'Neighbors', 'Planning', 'Parcel', 'Data gaps'];
   const lv = { error: 'fail', warn: 'warn', key: 'info', info: 'pass' };
   const groups = order.map(g => [g, R.findings.filter(f => f.group === g)]).filter(([, l]) => l.length);
-  el.innerHTML = `<div class="kv"><span><b style="font-family:var(--f-body)">${esc((R.parcel.PAR_ADD || '').trim())}</b></span><b>${esc(R.parcel.PARCEL_NO)}</b></div>
+  el.innerHTML = `<div class="kv"><span><b style="font-family:var(--f-body)">${esc((R.parcel.PAR_ADD || '').trim())}</b></span><b>${esc(tidyPno(R.parcel.PARCEL_NO))}</b></div>
     ${groups.map(([g, list]) => `<div class="chkgrp"><div class="sub">${g}</div>${list.map(f => `<div class="chk ${lv[f.level] || 'pass'}"><i></i><span class="d" style="grid-row:span 2;color:var(--ink)">${f.text}</span></div>`).join('')}</div>`).join('')}
     <details class="more" open><summary>${R.filled.length} inputs filled from this data</summary><ul style="columns:1">${R.filled.filter(([id]) => FIELDS[id]).map(([id, v, why]) => `<li><b>${esc(FIELDS[id].label)}</b>: ${esc(id === 'parcel.boundary' ? `${v.length} corners` : Array.isArray(v) ? (typeof v[0] === 'number' ? v.map(n => fmt(n, 1)).join(', ') : `${v.length} item${v.length === 1 ? '' : 's'}`) : typeof v === 'boolean' ? (v ? 'yes' : 'no') : optLabel(v))} <span class="note">· ${esc(why)}</span></li>`).join('')}</ul></details>
     <p class="note">Sources: ${[...R.sources].join(', ')}. Mapped data is for screening; confirm with a boundary survey, title search and agency letters.</p>`;
