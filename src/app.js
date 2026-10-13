@@ -1660,19 +1660,24 @@ async function maxOutBuilding() {
   // Round down to the nearest 100 sf, then place it for good.
   const target = Math.floor(prev.w * prev.d * o.floors * lo * lo / 100) * 100, k = Math.sqrt(target / (prev.w * prev.d * o.floors));
   test(k);
-  // The quick estimate skips the accessible-stall layout, so it can run a stall or two high. Confirm with the full
-  // solver and step the size down by the shortfall until the parking really fits.
-  for (let i = 0; i < 6; i++) {
+  // The quick estimate skips the accessible-stall layout, so it can run a stall or two high, and it can't see how much
+  // paving the parking adds. Confirm with the full solver, then step the size down until the parking fits and the
+  // impervious cover (building + paving) stays under the cap that the impervious maximum and open-space minimum set.
+  const impCap = Math.min(has('zoning.maxImpervious') ? num('zoning.maxImpervious') : 100, has('zoning.minOpenSpace') ? 100 - num('zoning.minOpenSpace') : 100);
+  for (let i = 0; i < 10; i++) {
     await runSearch();
     const req = required(), short = req - ((S.layout ? S.layout.eff : 0) + gar);
-    if (short <= 0) break;
-    lim = 'parking';
-    const g = Math.floor(gfaOf(o) * (1 - (short + 0.5) / Math.max(req, 1)) / 100) * 100;
+    const imp = analyze().D['derived.imperviousPercent'], over = imp - impCap;
+    let f = 0;
+    if (short > 0) { f = (short + 0.5) / Math.max(req, 1); lim = 'parking'; }
+    if (over > 0.05) { f = Math.max(f, over / Math.max(imp, 1) + 0.004); lim = has('zoning.minOpenSpace') && 100 - num('zoning.minOpenSpace') <= impCap ? 'open space' : 'impervious'; }
+    if (f <= 0) break;
+    const g = Math.floor(gfaOf(o) * (1 - f) / 100) * 100;
     if (g < 100) break;
     test(Math.sqrt(g / (prev.w * prev.d * o.floors)));
   }
-  const limText = { parking: 'the parking it needs', FAR: 'the FAR limit', 'lot coverage': 'the lot coverage limit', envelope: 'the edge of the buildable area (setbacks, buffers and other objects)' }[lim] || lim;
-  const hint = lim === 'parking' ? 'More parking (a garage, or a lower ratio) would let it grow.' : lim === 'FAR' ? 'FAR caps total floor area, so more stories will not help.' : 'Adding stories would add floor area on the same footprint.';
+  const limText = { parking: 'the parking it needs', FAR: 'the FAR limit', 'lot coverage': 'the lot coverage limit', envelope: 'the edge of the buildable area (setbacks, buffers and other objects)', impervious: 'the impervious surface limit', 'open space': 'the open space minimum' }[lim] || lim;
+  const hint = lim === 'impervious' || lim === 'open space' ? 'Building plus paving covers as much of the lot as allowed. More stories or a parking garage would free up ground.' : lim === 'parking' ? 'More parking (a garage, or a lower ratio) would let it grow.' : lim === 'FAR' ? 'FAR caps total floor area, so more stories will not help.' : 'Adding stories would add floor area on the same footprint.';
   S.moveNote = { id: o.id, prev, text: `Largest ${o.name} that works: ${fmt(gfaOf(o))} sf on ${o.floors} ${o.floors > 1 ? 'stories' : 'story'} (${fmt(o.w)}' × ${fmt(o.d)}'), needing ${fmt(required())} stalls. It stops at ${limText}. ${hint}` };
   S.placeNote = null; S.place = []; renderPlacements();
   renderObjList(); renderObjEditor(); renderReqBreak(); renderResults(); draw(); save();
@@ -1986,8 +1991,8 @@ function renderParcelFacts() {
   const a = parcelArea(); const env = S.env || computeEnv(); const ex = exclusions();
   $('#parcelFacts').innerHTML = `
     <div class="kv"><span>Site area</span><b>${fmt(a)} sf · ${fmt(a / 43560, 2)} ac</b></div>
-    <div class="kv"><span>Buildable area (net)</span><b>${env.building ? fmt(netBuildable(env.building, ex.noBuild)) + ' sf' : 'none'}</b></div>
-    <div class="kv"><span>Pavable area (net)</span><b>${env.paving ? fmt(netBuildable(env.paving, ex.noPave)) + ' sf' : 'none'}</b></div>
+    <div class="kv"><span>Buildable area (net)</span><b>${env.building ? fmt(Math.min(a, netBuildable(env.building, ex.noBuild))) + ' sf' : 'none'}</b></div>
+    <div class="kv"><span>Pavable area (net)</span><b>${env.paving ? fmt(Math.min(a, netBuildable(env.paving, ex.noPave))) + ' sf' : 'none'}</b></div>
     <div class="kv"><span>Frontage · perimeter</span><b>${fmt(env.frontLen)} · ${fmt(perimeter(S.parcel))} ft</b></div>
     ${S.geo ? `<div class="kv"><span>Located at</span><b>${S.geo.lat.toFixed(5)}, ${S.geo.lng.toFixed(5)}</b></div>` : ''}`;
 }
