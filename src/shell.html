@@ -108,6 +108,8 @@ code { font-family: var(--f-mono); font-size: 11.5px; }
 .top .proj { display: flex; gap: 6px; flex-wrap: wrap; }
 
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); overflow: auto; min-width: 0; min-height: 0; }
+/* the parcel finder sits first in the inputs panel so a search is always one click away */
+.parcel-find { padding: 12px 14px; background: var(--panel); border-bottom: 1px solid var(--line); gap: 8px; }
 .search { position: sticky; top: 0; z-index: 3; padding: 10px 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
 .sec { border-bottom: 1px solid var(--line); }
 .sec:last-child { border-bottom: 0; }
@@ -323,7 +325,12 @@ textarea.json { min-height: 160px; font-size: 11px; }
 
   <!-- ===== Inputs ===== -->
   <aside class="panel left" id="left" aria-label="Site inputs">
-    <div class="search"><input type="search" id="fieldSearch" placeholder="Search 200+ site inputs, e.g. setback, hydrant" aria-label="Search inputs"></div>
+    <div class="parcel-find stack">
+      <div class="rowx"><label class="f"><span>Find a parcel: address, parcel ID, or lat, long</span><input type="search" id="addr" placeholder="1000 W Broad St, or 122B4 I008"></label><button class="btn primary" id="btnFind">Find</button></div>
+      <p class="search-msg" id="searchMsg" role="status" aria-live="polite" hidden></p>
+      <label class="check"><input type="checkbox" id="keepBldgs"> Carry my buildings to the next parcel</label>
+    </div>
+    <div class="search"><input type="search" id="fieldSearch" placeholder="Jump to a setting, e.g. setback, hydrant" aria-label="Jump to a setting"></div>
 
     <details class="sec" open data-sec="parcel">
       <summary><span class="num">01</span> Parcel &amp; legal <span class="cnt"></span></summary>
@@ -359,10 +366,7 @@ textarea.json { min-height: 160px; font-size: 11px; }
             </div>
           </div>
           <div data-pane="map" class="stack" hidden>
-            <p class="note">In Athens-Clarke County, search an address or parcel number to load the real parcel and everything the county, FEMA, USGS and USDA publish about it. Elsewhere, find the spot and trace the parcel over the satellite image.</p>
-            <div class="rowx"><label class="f"><span>Address, parcel number, or latitude, longitude</span><input type="search" id="addr" placeholder="301 College Ave, or 171B1 H002"></label><button class="btn primary" id="btnFind">Find</button></div>
-            <p class="search-msg" id="searchMsg" role="status" aria-live="polite" hidden></p>
-            <label class="check"><input type="checkbox" id="keepBldgs"> Carry my buildings to the next parcel</label>
+            <p class="note">In Athens-Clarke County, use <b>Find a parcel</b> at the top to load the real parcel and everything the county, FEMA, USGS and USDA publish about it. Elsewhere, find the spot and trace the parcel over the satellite image.</p>
             <div class="stack" id="sitesBox" hidden><div class="sub">Saved sites</div><div class="objlist" id="sitesList"></div></div>
             <div class="stack" id="countyBox">
               <p class="note"><b>Athens-Clarke County parcels</b> are live from the county GIS.</p>
